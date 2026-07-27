@@ -65,10 +65,6 @@
           </div>
         </div>
 
-        <label v-if="s.inAvid" class="eb-muted" style="display:flex;gap:8px;align-items:center;font-size:12.5px;cursor:pointer">
-          <input type="checkbox" v-model="s.sourceHandles" />
-          Source handles (experimental) — pull handles from the source clip, not the timeline
-        </label>
 
         <div class="eb-grid cols-2">
           <div class="eb-field">
@@ -202,6 +198,7 @@ export default {
         if (g('prefix') != null) this.s.prefix = g('prefix')
         if (g('suffix') != null) this.s.suffix = g('suffix')
         if (g('projectMode')) this.s.projectMode = g('projectMode')
+        if (g('sourceHandles') != null) this.s.sourceHandles = g('sourceHandles') === '1'
       } catch (e) {}
     },
     stateLabel(x) {

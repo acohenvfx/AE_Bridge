@@ -397,33 +397,39 @@ async function createRawSubclip({ mobId, binPath, useMarks, useClipBounds, track
   return after.filter((i) => !before.has(i.mobId))
 }
 
-async function grabSourceHandledMob({ sequenceMobId, destBinPath, handles }) {
+async function grabSourceHandledMob({ sequenceMobId, destBinPath, handles, scratchBin = 'AEBridge_Scratch' }) {
   await ensureBin(destBinPath)
-  const binPath = await resolveBinPath(destBinPath)
+  const destPath = await resolveBinPath(destBinPath)
+  await ensureBin(scratchBin)
+  const scratchPath = await resolveBinPath(scratchBin)
   const vids = videoTracks(await getMobTrackInfo(sequenceMobId))
   if (!vids.length) throw new Error('No enabled video track for source-handle grab')
   const v1 = vids[0]
 
-  // Step 1: marked-portion subclip of the source master clip (no handles yet).
+  // Step 1: marked-portion subclip of the source master clip (intermediate) →
+  // goes in the scratch bin so it doesn't clutter the working bin.
   const aItems = await createRawSubclip({
-    mobId: sequenceMobId, binPath, useMarks: true, useClipBounds: false,
+    mobId: sequenceMobId, binPath: scratchPath, useMarks: true, useClipBounds: false,
     trackList: [{ type: v1.type, number: v1.number }], addFrames: 0,
   })
   if (!aItems.length) throw new Error('source-handle step 1 made no subclip (IN/OUT marked?)')
   const a = aItems[0]
-  logMcapiVerbose('source-handle step1 (marked subclip of source)', a)
+  logMcapiVerbose('source-handle step1 (scratch subclip of source)', a)
 
-  // Step 2: extend that subclip by handles — pulls the master's own media.
+  // Step 2: extend it by handles into the working bin — pulls the master's media.
   const h = Math.max(0, Number(handles) || 0)
   const bItems = h > 0
-    ? await createRawSubclip({ mobId: a.mobId, binPath, useMarks: false, useClipBounds: true, trackList: null, addFrames: h })
+    ? await createRawSubclip({ mobId: a.mobId, binPath: destPath, useMarks: false, useClipBounds: true, trackList: null, addFrames: h })
     : []
   if (!bItems.length) {
-    if (h > 0) logMcapiVerbose('source-handle step2 empty (no available handles?) — using step1', {})
-    return { exportMob: a, created: aItems }
+    // No handles requested/available: promote step-1 into the working bin so the
+    // export target lives with the other temps (scratch keeps only the intermediate).
+    if (h > 0) logMcapiVerbose('source-handle step2 empty (no available handles) — exporting without handles', {})
+    const promoted = await createRawSubclip({ mobId: a.mobId, binPath: destPath, useMarks: false, useClipBounds: true, trackList: null, addFrames: 0 })
+    return { exportMob: promoted[0] || a, created: promoted.length ? promoted : aItems }
   }
-  logMcapiVerbose('source-handle step2 (extended by handles)', bItems[0])
-  return { exportMob: bItems[0], created: [...aItems, ...bItems] }
+  logMcapiVerbose('source-handle step2 (extended by handles, in working bin)', bItems[0])
+  return { exportMob: bItems[0], created: bItems }
 }
 
 // --- export settings + export ---------------------------------------------
