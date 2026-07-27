@@ -279,62 +279,10 @@ export async function ensureBin(binName) {
   }
 }
 
-// --- subclip from timeline marks ------------------------------------------
-export async function createSubclipFromMarks({ sequenceMobId, destBinPath, handles = 0, createNewSequence = true }) {
-  const client = requireClient()
-  const F = GetListOfBinItemsRequestBody.BinItemFlags
-  await ensureBin(destBinPath)
-  const binPath = await resolveBinPath(destBinPath)
-
-  const beforeAll = await listBinItems(binPath).catch(() => [])
-  const beforeAllIds = new Set(beforeAll.map((i) => i.mobId))
-  const beforeSeqIds = new Set(
-    F ? (await listBinItems(binPath, [F.SEQUENCES]).catch(() => [])).map((i) => i.mobId) : []
-  )
-
-  const req = new CreateSubClipRequest()
-  const body = new CreateSubClipRequestBody()
-  body.setDestinationBinPath(binPath)
-  body.setMobId(sequenceMobId)
-  body.setUseMarksBounds(true) // grab the editor's IN/OUT on the timeline
-  body.setUseClipBounds(false)
-  // head_frame/end_frame are "used when >= 0" and default to 0, which would
-  // override use_marks_bounds with a 0->0 range. Set -1 so marks win.
-  body.setHeadFrame(-1)
-  body.setEndFrame(-1)
-  // create_new_sequence=true wraps the source subclips in ONE sequence (the
-  // correct, single export target). The subclips still reference the source
-  // master clips, so add_frames pulls the source clip's own media (true
-  // handles), clamped to available source frames.
-  body.setCreateNewSequence(createNewSequence)
-  body.setEnabledTracksOnly(false)
-  body.setRetainMarkers(true)
-  const h = Math.max(0, Number(handles) || 0)
-  body.setAddFramesAtHead(h)
-  body.setAddFramesAtEnd(h)
-  req.setBody(body)
-  await callUnary(client, 'createSubClip', req, getAccessTokenMetadata())
-
-  const afterAll = await listBinItems(binPath)
-  const created = afterAll.filter((i) => !beforeAllIds.has(i.mobId))
-  if (!created.length) {
-    throw new Error('Subclip created but could not be located in ' + binPath +
-      ' (is IN/OUT marked on the timeline?)')
-  }
-  // Export target: the new sequence (if we made one) else the new subclip.
-  let exportMob = null
-  if (createNewSequence && F) {
-    const afterSeq = await listBinItems(binPath, [F.SEQUENCES]).catch(() => [])
-    exportMob = afterSeq.find((i) => !beforeSeqIds.has(i.mobId)) || null
-  }
-  if (!exportMob) exportMob = created[0]
-  return { sequence: exportMob, created }
-}
-
-// --- source-handle grab (experimental, opt-in) -----------------------------
-// True source handles: subclip the marked portion of the SOURCE master clip,
-// then extend THAT subclip by `handles` (pulls the master's own media, not the
-// timeline). Kept separate from the working sequence grab.
+// --- source-clip grab ------------------------------------------------------
+// Handles come from the SOURCE master clip's own media (never the sequence
+// timeline): subclip the marked portion of the source clip, then extend THAT
+// subclip by `handles`.
 export async function getMobTrackInfo(mobId) {
   const client = requireClient()
   const req = new GetMobTrackInfoRequest()
