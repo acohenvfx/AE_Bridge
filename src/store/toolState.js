@@ -19,7 +19,6 @@ export const aebridge = Vue.observable({
   exportSettings: [],
   exportSetting: '',
   destBin: 'AEBridge_Temps',
-  sourceHandles: true, // default: pull handles from the source clip (uncheck = legacy sequence grab)
   sending: false,
   message: ''
 })

@@ -527,18 +527,13 @@ export async function importReturn({ filePath, destBinPath, importSettingsName =
 // --- orchestrator ----------------------------------------------------------
 // Grab the marked shot (subclip + rename), return { shot, exportMobId } WITHOUT
 // exporting — so the caller can name the export folder after the shot first.
-export async function grabShot({ destBinPath, handles = 0, sourceHandles = false }) {
+export async function grabShot({ destBinPath, handles = 0 }) {
   const shot = await getCurrentShot()
-  let sequence, created
-  if (sourceHandles) {
-    const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, destBinPath, handles })
-    sequence = r.exportMob
-    created = r.created
-  } else {
-    const r = await createSubclipFromMarks({ sequenceMobId: shot.mobId, destBinPath, handles })
-    sequence = r.sequence
-    created = r.created
-  }
+  // Always grab from the SOURCE clip (handles come from the source's own media,
+  // never the sequence timeline).
+  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, destBinPath, handles })
+  const sequence = r.exportMob
+  const created = r.created
 
   // Prefer the marker comment as the shot name; rename the sequence + subclip(s).
   let name = sequence.mobName || shot.name

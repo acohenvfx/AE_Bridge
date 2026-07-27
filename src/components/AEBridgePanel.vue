@@ -198,7 +198,6 @@ export default {
         if (g('prefix') != null) this.s.prefix = g('prefix')
         if (g('suffix') != null) this.s.suffix = g('suffix')
         if (g('projectMode')) this.s.projectMode = g('projectMode')
-        if (g('sourceHandles') != null) this.s.sourceHandles = g('sourceHandles') === '1'
       } catch (e) {}
     },
     stateLabel(x) {
@@ -299,8 +298,7 @@ export default {
           this.s.message = 'Grabbing shot from Avid…'
           const grabbed = await tl.grabShot({
             destBinPath: this.s.destBin,
-            handles: Number(this.s.handles) || 0,
-            sourceHandles: !!this.s.sourceHandles
+            handles: Number(this.s.handles) || 0
           })
           // apply the user's prefix/suffix to the plate name (not the Avid clip)
           const named = (this.s.prefix || '') + grabbed.shot.shot_name + (this.s.suffix || '')
