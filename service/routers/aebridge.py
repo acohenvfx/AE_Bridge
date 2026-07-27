@@ -71,9 +71,12 @@ from ..config import settings
 from ..integrations import ae, macos, mcapi
 from ..jobs import Job, store
 from ..models import (
+    EdlClip,
     ImportRequest,
     JobState,
     JobView,
+    ParseEdlRequest,
+    ParseEdlResponse,
     PickProjectResponse,
     PrepareRequest,
     PrepareResponse,
@@ -83,6 +86,7 @@ from ..models import (
     TemplateInfo,
     ValidationReport,
 )
+from .. import edl as edl_parser
 from ..paths import (
     PathNotAllowed,
     ensure_within,
@@ -127,6 +131,23 @@ def _resolve_template(template_id: str) -> Optional[Path]:
 def ae_status() -> dict:
     """Where the helper looked for After Effects and what it found."""
     return ae.diagnostics()
+
+
+# --- EDL parse (clip enumeration) -----------------------------------------
+@router.post("/parse-edl", response_model=ParseEdlResponse)
+def parse_edl(req: ParseEdlRequest) -> ParseEdlResponse:
+    """Parse an EDL the panel exported (for one track) into per-clip events with
+    record in/out — used to enumerate the V1 clips in the marked range."""
+    path = Path(req.edl_path).expanduser()
+    try:
+        events = edl_parser.read_and_parse(path, req.rec_in, req.rec_out, req.fps)
+    except FileNotFoundError:
+        raise HTTPException(status_code=400, detail=f"EDL not found: {path}")
+    return ParseEdlResponse(clips=[
+        EdlClip(num=e.num, clip_name=e.clip_name, rec_in=e.rec_in, rec_out=e.rec_out,
+                src_in=e.src_in, src_out=e.src_out)
+        for e in events
+    ])
 
 
 # --- project picker --------------------------------------------------------

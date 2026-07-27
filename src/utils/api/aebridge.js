@@ -17,6 +17,15 @@ export const newProject = () =>
 export const clearJobs = (all = false) =>
   postJSON('/v1/aebridge/jobs/clear' + (all ? '?all=true' : ''))
 
+// Parse an EDL the panel exported (helper reads the file, returns clip events).
+export const parseEdl = (edlPath, recIn, recOut, fps) =>
+  postJSON('/v1/aebridge/parse-edl', {
+    edl_path: edlPath,
+    rec_in: recIn || null,
+    rec_out: recOut || null,
+    fps: fps || 24
+  })
+
 export const prepare = (name) => postJSON('/v1/aebridge/prepare', { name: name || null })
 export const send = (payload) => postJSON('/v1/aebridge/send', payload)
 export const swap = (jobId) => postJSON(`/v1/aebridge/return/${jobId}/swap`)

@@ -62,6 +62,26 @@ class PrepareRequest(BaseModel):
     name: Optional[str] = None
 
 
+class ParseEdlRequest(BaseModel):
+    edl_path: str
+    rec_in: Optional[str] = None
+    rec_out: Optional[str] = None
+    fps: int = 24
+
+
+class EdlClip(BaseModel):
+    num: str
+    clip_name: str = ""
+    rec_in: str
+    rec_out: str
+    src_in: str
+    src_out: str
+
+
+class ParseEdlResponse(BaseModel):
+    clips: list[EdlClip]
+
+
 class PrepareResponse(BaseModel):
     job_id: str
     export_dir: str

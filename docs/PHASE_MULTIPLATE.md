@@ -67,6 +67,26 @@ imports independently.
   batch Send.
 - Per-plate / per-job progress and job rows.
 
+## Marks are not readable (confirmed) → how we filter to the range
+
+MCAPI does **not** expose the sequence mark IN/OUT in record TC (`GetValues` is
+test-only; no marks key), and `ExportEDL` ignores marks — it dumps the whole
+track. So to limit enumeration to the marked range we derive it indirectly:
+
+1. `CreateSubClip(use_marks_bounds, create_new_sequence=false, track_list=[V1])`
+   — MC applies the marks internally and makes a subclip **per V1 clip in the
+   marked range**. Read their `Name` + source in/out → the *set* of marked V1
+   clips.
+2. Match that set to the V1 EDL events (by clip name + source TC) → their
+   **record** spans → the marked record range.
+3. Filter every track's EDL to that record range; group by V1 clip.
+
+Trade-off: step 1 creates scratch subclips (put them in a dedicated scratch bin,
+clean up after). Name matching needs a source-TC tiebreaker for duplicate names.
+
+Status: **4a enumeration works** (parse + multi-track table). The marked-range
+filter above is the next build step (needs Avid verification of name/TC match).
+
 ## Unknowns to verify in Avid (4a)
 
 1. **EDL enumeration** — does `ExportEDL(track_list=[V1])` reliably list each V1

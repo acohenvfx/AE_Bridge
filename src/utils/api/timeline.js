@@ -37,8 +37,17 @@ import {
   ColumnInfo,
   ImportFileRequest,
   ImportFileRequestBody,
+  GetMobTrackInfoRequest,
+  GetMobTrackInfoRequestBody,
+  ExportEDLRequest,
+  ExportEDLRequestBody,
+  TrackLabel,
+  TrackList,
   ViewerType,
 } from '~/utils/grpc-web/MCAPI_Types_pb.js'
+
+// TrackType.TRACKTYPE_PICTURE = 0 (video)
+const TRACKTYPE_PICTURE = 0
 import {
   getMcapiClient,
   getAccessTokenMetadata,
@@ -398,6 +407,135 @@ export async function renameMob(mobId, newName) {
   body.setColumn(col)
   req.setBody(body)
   await callUnary(client, 'setMobInfo', req, getAccessTokenMetadata())
+}
+
+// --- track info + EDL (clip enumeration) -----------------------------------
+export async function getMobTrackInfo(mobId) {
+  const client = requireClient()
+  const req = new GetMobTrackInfoRequest()
+  const body = new GetMobTrackInfoRequestBody()
+  body.setMobId(mobId)
+  req.setBody(body)
+  const res = await callUnary(client, 'getMobTrackInfo', req, getAccessTokenMetadata())
+  const b = res && res.getBody ? res.getBody() : null
+  const list = b && b.getTrackInfoList ? b.getTrackInfoList() : null
+  const infos = list && list.getTrackInfoList ? list.getTrackInfoList() : []
+  const out = infos.map((ti) => {
+    const label = ti.getLabel ? ti.getLabel() : null
+    return {
+      type: label && label.getType ? label.getType() : 0,
+      number: label && label.getNumber ? label.getNumber() : 0,
+      customName: ti.getCustomName ? ti.getCustomName() : '',
+      enabled: ti.getEnabled ? Boolean(ti.getEnabled()) : false,
+      selected: ti.getSelected ? Boolean(ti.getSelected()) : false,
+      numSegments: ti.getNumSegments ? ti.getNumSegments() : 0,
+    }
+  })
+  logMcapiVerbose('track info', out)
+  return out
+}
+
+// Enabled/selected video tracks, ordered by number (V1..Vn).
+export function videoTracks(tracks, { onlyEnabledSelected = true } = {}) {
+  return tracks
+    .filter((t) => t.type === TRACKTYPE_PICTURE)
+    .filter((t) => (onlyEnabledSelected ? (t.enabled || t.selected) : true))
+    .filter((t) => t.numSegments > 0)
+    .sort((a, b) => a.number - b.number)
+}
+
+// Create marks-bounded subclips of ONE track without wrapping in a sequence, so
+// MC emits one subclip per clip of that track WITHIN the marked range (marks
+// aren't readable via MCAPI, but CreateSubClip applies them). Returns the new
+// bin items with their source Start/End columns. Used to derive the marked range.
+export async function getMarkedTrackClips({ sequenceMobId, scratchBin, track }) {
+  const client = requireClient()
+  await ensureBin(scratchBin)
+  const binPath = await resolveBinPath(scratchBin)
+  const before = new Set((await listBinItems(binPath).catch(() => [])).map((i) => i.mobId))
+
+  const req = new CreateSubClipRequest()
+  const body = new CreateSubClipRequestBody()
+  body.setDestinationBinPath(binPath)
+  body.setMobId(sequenceMobId)
+  body.setUseMarksBounds(true)
+  body.setUseClipBounds(false)
+  body.setHeadFrame(-1)
+  body.setEndFrame(-1)
+  body.setCreateNewSequence(false) // one subclip per source clip in the range
+  const tl = new TrackList()
+  const lbl = new TrackLabel()
+  lbl.setType(track.type)
+  lbl.setNumber(track.number)
+  tl.setTrackLabelsList([lbl])
+  body.setTrackList(tl)
+  body.setRetainMarkers(true)
+  body.setAddFramesAtHead(0)
+  body.setAddFramesAtEnd(0)
+  req.setBody(body)
+  await callUnary(client, 'createSubClip', req, getAccessTokenMetadata())
+
+  const after = await listBinItems(binPath)
+  const created = after.filter((i) => !before.has(i.mobId))
+  const out = []
+  for (const item of created) {
+    const cols = await getMobColumns(item.mobId).catch(() => ({}))
+    out.push({ mobId: item.mobId, name: item.mobName, srcIn: pick(cols, ['Start']), srcOut: pick(cols, ['End']) })
+  }
+  logMcapiVerbose('marked V1 clips', out)
+  return out
+}
+
+// Match the marked-range clips to that track's EDL events (by name, source-TC
+// tiebreak) to recover their RECORD spans, then take the overall record range.
+export function deriveMarkedRange(markedClips, edlEvents, fps = 24) {
+  // Strip Avid subclip suffixes (.Sub.01, .new.02) so names match the EDL.
+  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\.(sub|new)\.?\d*$/i, '')
+  const matched = []
+  for (const m of markedClips) {
+    const mn = norm(m.name)
+    let cands = edlEvents.filter((e) => norm(e.clip_name) === mn)
+    if (!cands.length) {
+      // tolerate prefix/substring (subclip name may embed the source name)
+      cands = edlEvents.filter((e) => {
+        const en = norm(e.clip_name)
+        return en && (mn.startsWith(en) || mn.includes(en) || en.includes(mn))
+      })
+    }
+    if (!cands.length) continue
+    let best = cands[0]
+    if (cands.length > 1 && m.srcIn) {
+      const target = tcToFrames(m.srcIn, fps)
+      best = cands.reduce((a, b) =>
+        Math.abs(tcToFrames(b.src_in, fps) - target) < Math.abs(tcToFrames(a.src_in, fps) - target) ? b : a
+      )
+    }
+    matched.push(best)
+  }
+  if (!matched.length) return null
+  const ins = matched.map((e) => tcToFrames(e.rec_in, fps))
+  const outs = matched.map((e) => tcToFrames(e.rec_out, fps))
+  const lo = matched[ins.indexOf(Math.min(...ins))].rec_in
+  const hi = matched[outs.indexOf(Math.max(...outs))].rec_out
+  return { recIn: lo, recOut: hi, matched: matched.length }
+}
+
+// Run ExportEDL for a single track; returns the EDL file path MC wrote.
+export async function exportEdlForTrack(mobId, track) {
+  const client = requireClient()
+  const req = new ExportEDLRequest()
+  const body = new ExportEDLRequestBody()
+  body.setMobId(mobId)
+  const tl = new TrackList()
+  const lbl = new TrackLabel()
+  lbl.setType(track.type)
+  lbl.setNumber(track.number)
+  tl.setTrackLabelsList([lbl])
+  body.setTrackList(tl)
+  req.setBody(body)
+  const res = await callUnary(client, 'exportEDL', req, getAccessTokenMetadata(), 120000)
+  const b = res && res.getBody ? res.getBody() : null
+  return b && b.getPath ? String(b.getPath() || '').trim() : ''
 }
 
 // --- return import ---------------------------------------------------------

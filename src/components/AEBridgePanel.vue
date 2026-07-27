@@ -49,6 +49,26 @@
         <div class="eb-muted" style="font-size:11.5px">
           Mark IN/OUT around the shot on the timeline; Send grabs that range via a subclip.
         </div>
+
+        <div v-if="s.inAvid" class="eb-actions">
+          <button class="eb-btn eb-btn--ghost eb-btn--mini" :disabled="analyzing" @click="analyzeRange">
+            {{ analyzing ? 'Analyzing…' : 'Analyze V1 clips (4a)' }}
+          </button>
+          <span class="eb-muted">{{ analyzeMsg }}</span>
+        </div>
+        <div v-if="detectedClips.length" class="eb-table-wrap" style="max-height:220px;overflow:auto">
+          <table class="eb-table">
+            <thead><tr><th>Track</th><th>Clip</th><th>Rec In</th><th>Rec Out</th></tr></thead>
+            <tbody>
+              <tr v-for="(c, i) in detectedClips" :key="i" :class="{ 'is-found': c.track === 1 }">
+                <td class="eb-mono">V{{ c.track }}</td>
+                <td>{{ c.clip_name || '(unnamed)' }}</td>
+                <td class="eb-mono">{{ c.rec_in }}</td>
+                <td class="eb-mono">{{ c.rec_out }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div class="eb-section">
@@ -160,7 +180,7 @@ import * as tl from '~/utils/api/timeline'
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, picking: false, reading: false, importingId: null, _timer: null, _shotTimer: null }
+    return { s: state, picking: false, reading: false, importingId: null, analyzing: false, analyzeMsg: '', detectedClips: [], _timer: null, _shotTimer: null }
   },
   async mounted() {
     this.restorePrefs()
@@ -252,6 +272,46 @@ export default {
       } finally {
         this.reading = false
         this._readInFlight = false
+      }
+    },
+    async analyzeRange() {
+      this.analyzing = true
+      this.analyzeMsg = ''
+      this.detectedClips = []
+      try {
+        const seq = await tl.getRecordSequence()
+        const tracks = await tl.getMobTrackInfo(seq.mobId)
+        const vids = tl.videoTracks(tracks)
+        if (!vids.length) {
+          this.analyzeMsg = 'No enabled video tracks with content.'
+          return
+        }
+        const v1 = vids[0]
+        // Derive the marked record range: marks-subclip V1 (respects marks) →
+        // match to V1 EDL → record range. Then filter every track to it.
+        const v1Path = await tl.exportEdlForTrack(seq.mobId, v1)
+        const v1Events = v1Path ? (await api.parseEdl(v1Path)).clips : []
+        const marked = await tl.getMarkedTrackClips({ sequenceMobId: seq.mobId, scratchBin: 'AEBridge_Scratch', track: v1 })
+        const range = tl.deriveMarkedRange(marked, v1Events)
+
+        const all = []
+        for (const t of vids) {
+          const edlPath = await tl.exportEdlForTrack(seq.mobId, t)
+          if (!edlPath) continue
+          const r = range
+            ? await api.parseEdl(edlPath, range.recIn, range.recOut)
+            : await api.parseEdl(edlPath)
+          for (const c of r.clips) all.push({ ...c, track: t.number })
+        }
+        all.sort((a, b) => (a.rec_in < b.rec_in ? -1 : a.rec_in > b.rec_in ? 1 : a.track - b.track))
+        this.detectedClips = all
+        this.analyzeMsg = range
+          ? all.length + ' clip(s) in marked range (' + range.recIn + '-' + range.recOut + ') across ' + vids.map((t) => 'V' + t.number).join(', ')
+          : all.length + ' clip(s) - could NOT derive marked range (showing whole sequence)'
+      } catch (e) {
+        this.analyzeMsg = 'Analyze error: ' + e.message
+      } finally {
+        this.analyzing = false
       }
     },
     setMode(mode) {
