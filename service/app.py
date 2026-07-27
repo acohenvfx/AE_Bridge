@@ -13,6 +13,7 @@ from .config import DEV_ORIGINS, settings
 from .integrations import ae
 from .routers import aebridge, ui, version
 from .routers.ui import DIST_HTML
+from .watcher import watcher
 
 app = FastAPI(title="AEBridge Helper", version="0.0.1")
 
@@ -36,6 +37,12 @@ app.include_router(ui.router)
 def _startup() -> None:
     settings.roots.ensure()
     settings.ae_version = ae.detect_ae_version()
+    watcher.start()  # watch for AE renders coming back
+
+
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    watcher.stop()
 
 
 # Serve the generated Nuxt export (assets like /_nuxt/*, "/") if it exists.

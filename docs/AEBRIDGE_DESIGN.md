@@ -371,9 +371,18 @@ panel. The helper owns the local filesystem side. Concretely:
 - **Export location:** `~/Desktop/AEBridge/exports` (and `renders/`) so artists
   can see the files; overridable via env.
 
-Still stubbed: the return watch-folder loop (`rendering → returned`) and
-`ffprobe` validation. `integrations/mcapi.py` remains only as a dev fallback for
-running the panel outside Avid.
+**Return trip (built):** the build script pre-queues the comp to render into the
+job's watch dir (`~/Desktop/AEBridge/renders/<job>`). A helper background thread
+(`service/watcher.py`) watches for a completed render (size-stable) and flips the
+job `ready_in_ae → returned`. The panel polls `/jobs`, shows **Import to Avid**,
+runs the MCAPI `ImportFile` into an `AEBridge_Returns` bin, and calls
+`POST /return/{job}/imported` to close the job (`→ done`). Path safety: returns
+must resolve under `watch_root`.
+
+Still to do: auto link-and-swap the return into the record sequence at the shot
+TC (`/return/{job}/swap` exists but does a stubbed edit), and `ffprobe`
+validation. `integrations/mcapi.py` remains only as a dev fallback for running
+the panel outside Avid.
 
 ## Resolved decisions
 

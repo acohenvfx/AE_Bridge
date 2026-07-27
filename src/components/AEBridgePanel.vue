@@ -116,10 +116,13 @@
               <div class="job-state">{{ stateLabel(j.state) }}</div>
             </div>
             <button
-              v-if="j.state === 'validated' || j.state === 'offered'"
-              class="eb-btn eb-btn--ghost eb-btn--mini"
-              @click="doSwap(j.job_id)"
-            >Swap in</button>
+              v-if="j.state === 'returned'"
+              class="eb-btn eb-btn--primary eb-btn--mini"
+              :disabled="importingId === j.job_id"
+              @click="doImport(j)"
+            >{{ importingId === j.job_id ? 'Importing…' : 'Import to Avid' }}</button>
+            <span v-else-if="j.state === 'done'" class="eb-stat"><b>imported</b></span>
+            <span v-else-if="j.state === 'ready_in_ae'" class="eb-stat"><b>awaiting render</b></span>
             <span v-else class="eb-stat">
               <b>{{ j.project_mode === 'existing_project' ? 'shared' : 'per-shot' }}</b>
             </span>
@@ -138,7 +141,7 @@ import * as tl from '~/utils/api/timeline'
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, picking: false, reading: false, _timer: null }
+    return { s: state, picking: false, reading: false, importingId: null, returnBin: 'AEBridge_Returns', _timer: null }
   },
   async mounted() {
     this.s.inAvid = tl.mcapiAvailable()
@@ -257,12 +260,22 @@ export default {
         this.s.sending = false
       }
     },
-    async doSwap(jobId) {
+    async doImport(job) {
+      if (!this.s.inAvid) {
+        this.s.message = 'Import needs Media Composer (MCAPI).'
+        return
+      }
+      this.importingId = job.job_id
+      this.s.message = 'Importing render into Avid…'
       try {
-        await api.swap(jobId)
+        await tl.importReturn({ filePath: job.return_path, destBinPath: this.returnBin })
+        await api.markImported(job.job_id, this.returnBin)
+        this.s.message = 'Imported ' + job.job_id + ' into ' + this.returnBin
         await this.refreshJobs()
       } catch (e) {
-        this.s.message = 'Swap error: ' + e.message
+        this.s.message = 'Import error: ' + e.message
+      } finally {
+        this.importingId = null
       }
     },
     async showAeDiag() {

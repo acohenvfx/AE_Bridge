@@ -122,7 +122,9 @@ class JobView(BaseModel):
     reference_path: Optional[str] = None
     sidecar_path: Optional[str] = None
     aep_path: Optional[str] = None
+    watch_dir: Optional[str] = None
     return_path: Optional[str] = None
+    return_bin: Optional[str] = None
     validation: Optional[ValidationReport] = None
     error: Optional[str] = None
 

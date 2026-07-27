@@ -13,5 +13,6 @@ export const pickProject = () =>
 export const prepare = () => postJSON('/v1/aebridge/prepare')
 export const send = (payload) => postJSON('/v1/aebridge/send', payload)
 export const swap = (jobId) => postJSON(`/v1/aebridge/return/${jobId}/swap`)
-export const importReturn = (jobId, targetBin) =>
-  postJSON(`/v1/aebridge/return/${jobId}/import`, { target_bin: targetBin || null })
+// Panel does the MCAPI ImportFile itself; this just records state on the helper.
+export const markImported = (jobId, targetBin) =>
+  postJSON(`/v1/aebridge/return/${jobId}/imported`, { target_bin: targetBin || null })

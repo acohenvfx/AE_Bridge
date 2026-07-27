@@ -35,6 +35,8 @@ import {
   SetMobInfoRequest,
   SetMobInfoRequestBody,
   ColumnInfo,
+  ImportFileRequest,
+  ImportFileRequestBody,
   ViewerType,
 } from '~/utils/grpc-web/MCAPI_Types_pb.js'
 import {
@@ -393,6 +395,23 @@ export async function renameMob(mobId, newName) {
   body.setColumn(col)
   req.setBody(body)
   await callUnary(client, 'setMobInfo', req, getAccessTokenMetadata())
+}
+
+// --- return import ---------------------------------------------------------
+// Import the AE render back into Avid, into a returns bin. Returns the new mobId.
+export async function importReturn({ filePath, destBinPath, importSettingsName = '' }) {
+  const client = requireClient()
+  await ensureBin(destBinPath)
+  const binPath = await resolveBinPath(destBinPath)
+  const req = new ImportFileRequest()
+  const body = new ImportFileRequestBody()
+  body.setFilePath(filePath)
+  if (importSettingsName) body.setImportSettingsName(importSettingsName)
+  if (body.setDestinationBin) body.setDestinationBin(binPath)
+  req.setBody(body)
+  const res = await callUnary(client, 'importFile', req, getAccessTokenMetadata(), 120000)
+  const rb = res && res.getBody ? res.getBody() : null
+  return rb && rb.getMobId ? String(rb.getMobId() || '') : ''
 }
 
 // --- orchestrator ----------------------------------------------------------

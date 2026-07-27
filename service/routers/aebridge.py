@@ -194,6 +194,11 @@ def send(req: SendRequest) -> JobView:
     job_export_dir = settings.roots.export_root / job_id
     job_export_dir.mkdir(parents=True, exist_ok=True)
 
+    # Where AE will render the return; the watcher polls this dir.
+    watch_dir = settings.roots.watch_root / job_id
+    watch_dir.mkdir(parents=True, exist_ok=True)
+    job.watch_dir = watch_dir
+
     # Reference: the panel exported it via MCAPI (validate under export_root),
     # else fall back to a generated placeholder plate (dev / no real export).
     if req.reference_path:
@@ -239,6 +244,10 @@ def send(req: SendRequest) -> JobView:
         created=datetime.now(timezone.utc).isoformat(),
     )
 
+    # Render output goes into the job's watch dir, named after the shot.
+    safe_name = "".join(c if c.isalnum() or c in "-_. " else "_" for c in shot["shot_name"]).strip() or "shot"
+    render_output = str(watch_dir / f"{safe_name}.mov")
+
     aep_path, jsx_path = ae.prepare_comp(
         sidecar=sidecar,
         template_path=template_path,
@@ -246,6 +255,7 @@ def send(req: SendRequest) -> JobView:
         aep_work_root=settings.roots.aep_work_root,
         project_mode=req.project_mode,
         target_project=target_project,
+        render_output=render_output,
     )
     sidecar.aep_path = str(aep_path)
 
@@ -324,6 +334,23 @@ def import_return(job_id: str, req: ImportRequest) -> JobView:
     return job.view()
 
 
+@router.post("/return/{job_id}/imported", response_model=JobView)
+def mark_imported(job_id: str, req: ImportRequest) -> JobView:
+    """Record that the panel imported the return into Avid (via MCAPI) and close
+    the job. The actual ImportFile runs client-side; this just updates state."""
+    job = _require(job_id)
+    if job.return_path is None:
+        raise HTTPException(status_code=409, detail="no return detected yet")
+    try:
+        ensure_within(job.return_path, [settings.roots.watch_root])
+    except PathNotAllowed as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    job.return_bin = req.target_bin or _default_return_bin(job)
+    if job.state in (JobState.returned, JobState.validated, JobState.offered):
+        job.state = JobState.done
+    return job.view()
+
+
 @router.post("/return/{job_id}/swap", response_model=JobView)
 def swap(job_id: str) -> JobView:
     job = _require(job_id)
@@ -343,6 +370,12 @@ def _default_bin(job: Job) -> str:
     """One bin per reel/sequence — never per shot."""
     seq = job.sidecar.sequence_name if job.sidecar else "AEBridge"
     return f"AEBridge_Temps_{seq}"
+
+
+def _default_return_bin(job: Job) -> str:
+    """Returns land in one bin per reel/sequence."""
+    seq = job.sidecar.sequence_name if job.sidecar else "AEBridge"
+    return f"AEBridge_Returns_{seq}"
 
 
 def _require(job_id: str) -> Job:

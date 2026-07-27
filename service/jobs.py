@@ -16,12 +16,14 @@ from typing import Optional
 from .models import JobState, JobView, ProjectMode, Sidecar, ValidationReport
 
 _ALLOWED_TRANSITIONS = {
+    # The watcher jumps ready_in_ae -> returned when a render appears; import
+    # from the panel takes returned -> done.
     JobState.exporting: {JobState.ready_in_ae, JobState.error},
-    JobState.ready_in_ae: {JobState.rendering, JobState.error},
+    JobState.ready_in_ae: {JobState.rendering, JobState.returned, JobState.error},
     JobState.rendering: {JobState.returned, JobState.error},
-    JobState.returned: {JobState.validated, JobState.error},
-    JobState.validated: {JobState.offered, JobState.swapped, JobState.error},
-    JobState.offered: {JobState.swapped, JobState.error},
+    JobState.returned: {JobState.validated, JobState.done, JobState.error},
+    JobState.validated: {JobState.offered, JobState.swapped, JobState.done, JobState.error},
+    JobState.offered: {JobState.swapped, JobState.done, JobState.error},
     JobState.swapped: {JobState.done, JobState.error},
     JobState.done: set(),
     JobState.error: set(),
@@ -40,7 +42,9 @@ class Job:
     reference_path: Optional[Path] = None
     sidecar_path: Optional[Path] = None
     aep_path: Optional[Path] = None
+    watch_dir: Optional[Path] = None
     return_path: Optional[Path] = None
+    return_bin: Optional[str] = None
     sidecar: Optional[Sidecar] = None
     validation: Optional[ValidationReport] = None
     error: Optional[str] = None
@@ -62,7 +66,9 @@ class Job:
             reference_path=str(self.reference_path) if self.reference_path else None,
             sidecar_path=str(self.sidecar_path) if self.sidecar_path else None,
             aep_path=str(self.aep_path) if self.aep_path else None,
+            watch_dir=str(self.watch_dir) if self.watch_dir else None,
             return_path=str(self.return_path) if self.return_path else None,
+            return_bin=self.return_bin,
             validation=self.validation,
             error=self.error,
         )

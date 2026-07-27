@@ -76,15 +76,23 @@ yarn build:avpi:release      # -> dist/AEBridge.avpi (release: helper serves UI)
 
 ## Status
 
-**Avid → After Effects works end to end.** Mark a shot, Send, and After Effects
-opens a correctly-sized comp with the real exported plate, named from the marker
-comment. Real on macOS: MCAPI grab (viewer → subclip-from-marks → rename →
-export), After Effects discovery + ExtendScript comp build + launch, native
-`.aep` picker, path-safe export dirs, and export-completion waiting.
+**Full round-trip works.**
 
-**Remaining:** the **return trip** — a watch-folder that imports the AE render
-back into Avid and offers to link-and-swap it into the record sequence. The
-helper routes (`/return/import`, `/return/swap`) exist; the watcher does not yet.
+- **Out (Avid → AE):** mark a shot, Send → subclip-from-marks, marker-comment
+  naming, QuickTime export, After Effects opens a correctly-sized comp with the
+  plate. The comp is pre-queued to render into the job's watch folder.
+- **Back (AE → Avid):** the editor renders the queued comp; the helper's
+  watch-folder loop detects the finished render and flips the job to
+  `returned`; the panel shows **Import to Avid** and does the MCAPI `ImportFile`
+  into an `AEBridge_Returns` bin.
+
+Real on macOS: MCAPI grab + import, ExtendScript comp build + render-queue
+setup + AE launch, native `.aep` picker, path-safe export/watch dirs,
+export- and render-completion waiting.
+
+**Next:** auto **link-and-swap** the return into the record sequence at the
+shot's TC (currently it imports to a bin and the editor cuts it in), and
+`ffprobe` validation of the return against the sidecar.
 
 See `docs/BUILD_AND_INSTALL.md` to build/run and `docs/AEBRIDGE_DESIGN.md` for
 the route contract.

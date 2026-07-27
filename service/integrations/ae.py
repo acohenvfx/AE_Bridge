@@ -179,6 +179,16 @@ _JSX_TEMPLATE = r"""
             } catch (e) {}
         }
 
+        // Queue the comp to render into the watched folder so the editor just
+        // hits Render and AEBridge picks up the result.
+        if (P.render_output) {
+            try {
+                var rq = app.project.renderQueue.items.add(comp);
+                var om = rq.outputModule(1);
+                om.file = new File(P.render_output);
+            } catch (e) { /* render queue optional */ }
+        }
+
         comp.openInViewer();
         var out = new File(P.aep_path);
         proj.save(out);
@@ -198,6 +208,7 @@ def prepare_comp(
     aep_work_root: Path,
     project_mode: ProjectMode,
     target_project: Optional[Path],
+    render_output: str = "",
 ) -> tuple[Path, Path]:
     """Write the ExtendScript that builds the comp. Returns (aep_path, jsx_path)."""
     job_dir = aep_work_root / sidecar.job_id
@@ -228,6 +239,7 @@ def prepare_comp(
         "frame_rate": sidecar.frame_rate,
         "frame_count": sidecar.frame_count,
         "reference": str(reference_mov) if has_ref else "",
+        "render_output": render_output or "",
     }
     jsx = _JSX_TEMPLATE % {"params": json.dumps(params)}
     jsx_path = job_dir / "build.jsx"
