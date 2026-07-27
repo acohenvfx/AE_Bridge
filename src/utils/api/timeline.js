@@ -37,8 +37,14 @@ import {
   ColumnInfo,
   ImportFileRequest,
   ImportFileRequestBody,
+  GetMobTrackInfoRequest,
+  GetMobTrackInfoRequestBody,
+  TrackLabel,
+  TrackList,
   ViewerType,
 } from '~/utils/grpc-web/MCAPI_Types_pb.js'
+
+const TRACKTYPE_PICTURE = 0 // TrackType.TRACKTYPE_PICTURE (video)
 import {
   getMcapiClient,
   getAccessTokenMetadata,
@@ -325,6 +331,101 @@ export async function createSubclipFromMarks({ sequenceMobId, destBinPath, handl
   return { sequence: exportMob, created }
 }
 
+// --- source-handle grab (experimental, opt-in) -----------------------------
+// True source handles: subclip the marked portion of the SOURCE master clip,
+// then extend THAT subclip by `handles` (pulls the master's own media, not the
+// timeline). Kept separate from the working sequence grab.
+export async function getMobTrackInfo(mobId) {
+  const client = requireClient()
+  const req = new GetMobTrackInfoRequest()
+  const body = new GetMobTrackInfoRequestBody()
+  body.setMobId(mobId)
+  req.setBody(body)
+  const res = await callUnary(client, 'getMobTrackInfo', req, getAccessTokenMetadata())
+  const b = res && res.getBody ? res.getBody() : null
+  const list = b && b.getTrackInfoList ? b.getTrackInfoList() : null
+  const infos = list && list.getTrackInfoList ? list.getTrackInfoList() : []
+  return infos.map((ti) => {
+    const label = ti.getLabel ? ti.getLabel() : null
+    return {
+      type: label && label.getType ? label.getType() : 0,
+      number: label && label.getNumber ? label.getNumber() : 0,
+      enabled: ti.getEnabled ? Boolean(ti.getEnabled()) : false,
+      selected: ti.getSelected ? Boolean(ti.getSelected()) : false,
+      numSegments: ti.getNumSegments ? ti.getNumSegments() : 0,
+    }
+  })
+}
+
+export function videoTracks(tracks) {
+  return tracks
+    .filter((t) => t.type === TRACKTYPE_PICTURE && (t.enabled || t.selected) && t.numSegments > 0)
+    .sort((a, b) => a.number - b.number)
+}
+
+// One CreateSubClip; returns the new SUBCLIP items (via SUBCLIPS-flag diff).
+async function createRawSubclip({ mobId, binPath, useMarks, useClipBounds, trackList, addFrames }) {
+  const client = requireClient()
+  const F = GetListOfBinItemsRequestBody.BinItemFlags
+  const before = new Set(F ? (await listBinItems(binPath, [F.SUBCLIPS]).catch(() => [])).map((i) => i.mobId) : [])
+  const req = new CreateSubClipRequest()
+  const body = new CreateSubClipRequestBody()
+  body.setDestinationBinPath(binPath)
+  body.setMobId(mobId)
+  body.setUseMarksBounds(!!useMarks)
+  body.setUseClipBounds(!!useClipBounds)
+  body.setHeadFrame(-1)
+  body.setEndFrame(-1)
+  body.setCreateNewSequence(false)
+  body.setEnabledTracksOnly(false)
+  body.setRetainMarkers(true)
+  body.setAddFramesAtHead(Math.max(0, addFrames || 0))
+  body.setAddFramesAtEnd(Math.max(0, addFrames || 0))
+  if (trackList && trackList.length) {
+    const tl = new TrackList()
+    tl.setTrackLabelsList(trackList.map((t) => {
+      const l = new TrackLabel()
+      l.setType(t.type)
+      l.setNumber(t.number)
+      return l
+    }))
+    body.setTrackList(tl)
+  }
+  req.setBody(body)
+  await callUnary(client, 'createSubClip', req, getAccessTokenMetadata())
+  const after = F ? await listBinItems(binPath, [F.SUBCLIPS]).catch(() => []) : []
+  return after.filter((i) => !before.has(i.mobId))
+}
+
+async function grabSourceHandledMob({ sequenceMobId, destBinPath, handles }) {
+  await ensureBin(destBinPath)
+  const binPath = await resolveBinPath(destBinPath)
+  const vids = videoTracks(await getMobTrackInfo(sequenceMobId))
+  if (!vids.length) throw new Error('No enabled video track for source-handle grab')
+  const v1 = vids[0]
+
+  // Step 1: marked-portion subclip of the source master clip (no handles yet).
+  const aItems = await createRawSubclip({
+    mobId: sequenceMobId, binPath, useMarks: true, useClipBounds: false,
+    trackList: [{ type: v1.type, number: v1.number }], addFrames: 0,
+  })
+  if (!aItems.length) throw new Error('source-handle step 1 made no subclip (IN/OUT marked?)')
+  const a = aItems[0]
+  logMcapiVerbose('source-handle step1 (marked subclip of source)', a)
+
+  // Step 2: extend that subclip by handles — pulls the master's own media.
+  const h = Math.max(0, Number(handles) || 0)
+  const bItems = h > 0
+    ? await createRawSubclip({ mobId: a.mobId, binPath, useMarks: false, useClipBounds: true, trackList: null, addFrames: h })
+    : []
+  if (!bItems.length) {
+    if (h > 0) logMcapiVerbose('source-handle step2 empty (no available handles?) — using step1', {})
+    return { exportMob: a, created: aItems }
+  }
+  logMcapiVerbose('source-handle step2 (extended by handles)', bItems[0])
+  return { exportMob: bItems[0], created: [...aItems, ...bItems] }
+}
+
 // --- export settings + export ---------------------------------------------
 export async function getExportSettings() {
   const client = requireClient()
@@ -420,9 +521,18 @@ export async function importReturn({ filePath, destBinPath, importSettingsName =
 // --- orchestrator ----------------------------------------------------------
 // Grab the marked shot (subclip + rename), return { shot, exportMobId } WITHOUT
 // exporting — so the caller can name the export folder after the shot first.
-export async function grabShot({ destBinPath, handles = 0 }) {
+export async function grabShot({ destBinPath, handles = 0, sourceHandles = false }) {
   const shot = await getCurrentShot()
-  const { sequence, created } = await createSubclipFromMarks({ sequenceMobId: shot.mobId, destBinPath, handles })
+  let sequence, created
+  if (sourceHandles) {
+    const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, destBinPath, handles })
+    sequence = r.exportMob
+    created = r.created
+  } else {
+    const r = await createSubclipFromMarks({ sequenceMobId: shot.mobId, destBinPath, handles })
+    sequence = r.sequence
+    created = r.created
+  }
 
   // Prefer the marker comment as the shot name; rename the sequence + subclip(s).
   let name = sequence.mobName || shot.name

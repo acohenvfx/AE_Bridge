@@ -19,6 +19,7 @@ export const aebridge = Vue.observable({
   exportSettings: [],
   exportSetting: '',
   destBin: 'AEBridge_Temps',
+  sourceHandles: false, // experimental: pull handles from the source clip
   sending: false,
   message: ''
 })

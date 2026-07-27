@@ -65,6 +65,11 @@
           </div>
         </div>
 
+        <label v-if="s.inAvid" class="eb-muted" style="display:flex;gap:8px;align-items:center;font-size:12.5px;cursor:pointer">
+          <input type="checkbox" v-model="s.sourceHandles" />
+          Source handles (experimental) — pull handles from the source clip, not the timeline
+        </label>
+
         <div class="eb-grid cols-2">
           <div class="eb-field">
             <label class="eb-label">Name prefix</label>
@@ -297,7 +302,8 @@ export default {
           this.s.message = 'Grabbing shot from Avid…'
           const grabbed = await tl.grabShot({
             destBinPath: this.s.destBin,
-            handles: Number(this.s.handles) || 0
+            handles: Number(this.s.handles) || 0,
+            sourceHandles: !!this.s.sourceHandles
           })
           // apply the user's prefix/suffix to the plate name (not the Avid clip)
           const named = (this.s.prefix || '') + grabbed.shot.shot_name + (this.s.suffix || '')
