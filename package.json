@@ -1,0 +1,31 @@
+{
+  "name": "aebridge-panel",
+  "version": "0.0.1",
+  "private": true,
+  "description": "AEBridge — Avid Media Composer <-> After Effects round-trip panel",
+  "scripts": {
+    "dev": "nuxt --port 3010 --hostname 127.0.0.1",
+    "build": "nuxt build",
+    "start": "nuxt start --port 3010 --hostname 127.0.0.1",
+    "generate": "nuxt generate",
+    "generate:release": "AEB_RELEASE=1 nuxt generate",
+    "build:panel": "node build/panel.mjs",
+    "build:avpi:release": "AEB_RELEASE=1 node build/panel.mjs",
+    "build:copy": "node build/copy.mjs --run",
+    "lint": "eslint --ext .js,.mjs,.vue --ignore-path .gitignore .",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "google-protobuf": "^3.21.4",
+    "grpc-web": "^1.5.0",
+    "nuxt": "2.15.8"
+  },
+  "devDependencies": {
+    "@babel/plugin-proposal-private-property-in-object": "7.21.11",
+    "sass": "1.32.13",
+    "sass-loader": "10.1.1"
+  },
+  "engines": {
+    "node": "16.20.2"
+  }
+}

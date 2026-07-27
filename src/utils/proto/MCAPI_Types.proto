@@ -1,0 +1,2527 @@
+// Copyright 2021 - 2025 by Avid Technology, Inc.
+
+
+syntax = "proto3";
+// @exclude import "google/protobuf/timestamp.proto";
+
+package mcapi;
+
+
+/**
+ * The request of GetListOfBinItems()
+ */
+message GetListOfBinItemsRequest {
+	RequestHeader header = 1; // Request header
+	GetListOfBinItemsRequestBody body = 2; // Request body
+}
+
+/**
+ * The response of GetListOfBinItems()
+ */
+message GetListOfBinItemsResponse {
+	ResponseHeader header = 1; // Response header
+	GetListOfBinItemsResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of GetListOfBinItems
+ */
+message GetListOfBinItemsRequestBody
+{
+	string bin_relative_path = 1;
+	repeated BinItemFlags bin_flags = 2;
+	bool only_visible_flag = 3;
+	bool only_selected_flag = 4;
+
+	enum BinItemFlags
+	{
+		AllTypes = 0;
+		masterClips = 1;
+		linkedMasterClips = 2;
+		subclips = 3;
+		sequences = 4;
+		sources = 5;
+		effects = 6;
+		motionEffects = 7;
+		preCompsRE = 8;
+		preCompsTMK = 9;
+		groups = 10;
+		stereoscopicClips = 11;
+	}
+}
+
+/**
+ * The body of GetListOfBinItems
+ */
+message GetListOfBinItemsResponseBody
+{
+	string mob_name = 1; // The message to be returned from the server
+	string mob_id = 2;
+	bool mob_selected = 3;
+}
+
+
+/**
+ * The request of Echo()
+ */
+message EchoRequest {
+	RequestHeader header = 1; // Request header
+	EchoRequestBody body = 2; // Request body
+}
+
+/**
+ * The response of Echo()
+ */
+message EchoResponse {
+	ResponseHeader header = 1; // Response header
+	EchoResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of EchoRequest
+ */
+message EchoRequestBody
+{
+	string message = 1; // The message to be sent to the server
+}
+
+/**
+ * The body of EchoResponse
+ */
+message EchoResponseBody
+{
+	string message = 1; // The message to be returned from the server
+}
+
+/**
+ * The request of GetValues
+ */
+message GetValuesRequest {
+	RequestHeader header = 1; // Request header
+	GetValuesRequestBody body = 2; // Request body
+}
+
+/**
+ * The response of GetValues
+ */
+message GetValuesResponse {
+	ResponseHeader header = 1; // Response header
+	GetValuesResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of GetValuesRequest
+ */
+message GetValuesRequestBody
+{
+	string key = 1;
+	uint32 count = 2;
+}
+
+/**
+ * The body of message GetValuesResponse
+ */
+message GetValuesResponseBody
+{
+	string value = 1;
+}
+
+
+/**
+ * The request of GetAppInfo()
+ */
+message GetAppInfoRequest {
+	RequestHeader header = 1; // Request header
+	GetAppInfoRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of GetAppInfoRequest
+ */
+message GetAppInfoRequestBody
+{
+
+}
+
+/**
+ * The response of GetAppInfo()
+ */
+message GetAppInfoResponse {
+	ResponseHeader header = 1; // Request header
+	GetAppInfoResponseBody body = 2; // Request body
+}
+
+/**
+ * The body of GetAppInfoResponse
+ */
+message GetAppInfoResponseBody
+{
+	string app_name = 1; // The name of the application
+	string app_version = 2; // The version of the application
+	AppBusyStatus app_busy_status = 3; // The busy status of the application
+	string sdk_version = 4; // The version of panel SDK 
+
+	/**
+	* Status Media Composer app
+	*/
+	enum AppBusyStatus
+	{
+		Idle = 0; // Media Composer is idle
+		Playing = 1; // Media Composer is playing
+		ModalDialog = 2; // A modal dialog is being displayed
+		Busy = 3; // Media Composer is busy (displaying spining cursor)
+	}
+}
+
+/**
+ * The request of GetHostInfo()
+ */
+message GetHostInfoRequest {
+	RequestHeader header = 1; // Request header
+	GetHostInfoRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of GetHostInfoRequest
+ */
+message GetHostInfoRequestBody
+{
+}
+
+/**
+ * The response of GetHostInfo()
+ */
+message GetHostInfoResponse {
+	ResponseHeader header = 1; // Request header
+	GetHostInfoResponseBody body = 2; // Request body
+}
+
+/**
+ * The body of GetHostInfoResponse
+ */
+message GetHostInfoResponseBody
+{
+	string appl_name = 1; // The name of application executable
+	string user_name = 2; // The username
+	string workstation_name = 3; // The name of workstation
+}
+
+/**
+ * The request of GetBins
+ */
+message GetBinsRequest
+{
+	RequestHeader header = 1; // Request header
+	GetBinsRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of GetBinsRequest
+ */
+message GetBinsRequestBody
+{
+	optional string project_path= 1; // Project path. For performance reasons, leave empty if requesting the bins in the currently open project.
+	repeated GetBinsFlag request_flag = 2; // Specifies which type to be returned
+
+	/**
+	* Specifies which types to be returned
+	*/
+	enum GetBinsFlag
+	{
+		AllTypes = 0; // All bin types
+		BinType = 1; // Bin 
+		ScriptType = 2; // Script
+		VolumeType = 3; // Volume Bin
+		OnlyOpen = 4;
+	}
+}
+
+/**
+ * The response of GetBins
+ */
+message GetBinsResponse
+{
+	ResponseHeader header = 1;
+	GetBinsResponseBody body = 2; 
+}
+
+/**
+ * The body of GetBinsResponse
+ */
+message GetBinsResponseBody
+{
+	string absolute_path = 1; // Absolute path, including name and extension
+}
+
+/**
+ * The request of GetBinInfo()
+ */
+message GetBinInfoRequest
+{
+	RequestHeader header = 1; // Request header
+	GetBinInfoRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of GetBinInfoRequest
+ */
+message GetBinInfoRequestBody
+{
+	string relative_bin_path = 1; // Bin path relative to project path
+}
+
+/**
+ * The response of GetBinInfo
+ */
+message GetBinInfoResponse
+{
+	ResponseHeader header = 1; // Response header
+	GetBinInfoResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of GetBinInfoResponse
+ */
+message GetBinInfoResponseBody
+{
+	bool lock_state = 1; // True if the bin is locked
+	string lock_owner = 2; // Username of the lock's owner
+	uint64 size = 3; // The size of the bin (unit ?)
+	bool is_open = 4; // True if the bin was opened, false otherwise
+	string background_color = 5; // Bin's background color. In this format: '#rrggbb'
+}
+
+/**
+ * The request of GetBinColumnInfo()
+ */
+ message GetBinColumnInfoRequest
+ {
+	 RequestHeader header = 1; // Request header
+	 GetBinColumnInfoRequestBody body = 2; // Request body
+ }
+ 
+ /**
+  * The body of GetBinColumnInfoRequest
+  */
+ message GetBinColumnInfoRequestBody
+ {
+	 string bin_path = 1; // Bin path can be relative to project folder or an absolute path
+ }
+ 
+ /**
+ * The response of GetBinColumnInfo()
+ */
+ message GetBinColumnInfoResponse
+ {
+	 ResponseHeader header = 1; // Response header
+	 GetBinColumnInfoResponseBody body = 2; // Response body
+ }
+ 
+ /**
+  * The body of GetBinColumnInfoResponse
+  */
+ message GetBinColumnInfoResponseBody
+ {
+	 repeated BinColumnInfo column = 1; // Contains the information of all bin columns
+	 message BinColumnInfo
+	 {
+		 string column_name = 1; // Bin column name
+		 string column_value_type = 2; // The type of the bin column value, such as string, integer, float, etc.
+		 bool column_hidden = 3; // True if the bin column is hidden
+		 bool column_is_custom = 4; // True if the bin column is user custom column
+		 bool column_is_readonly = 5; // True if the bin column cant be modified
+	 }
+ }
+ 
+/**
+ * The request of GetMobInfo
+ */
+message GetMobInfoRequest
+{
+	RequestHeader header = 1; // Request header
+	GetMobInfoRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of GetMobInfoRequest. For better performance, 
+ * set only_visible_columns to true or includes_empty_columns to false.
+ */
+message GetMobInfoRequestBody
+{
+	string mob_id = 1; // SMPTE formatted mob ID string returned from GetMobContent()
+	bool only_visible_columns = 2; // True if we only want to include visible columns
+	bool includes_empty_columns = 3; // True if we want to also includes empty columns.
+}
+
+/**
+ * The response of GetMobInfo
+ */
+message GetMobInfoResponse
+{
+	ResponseHeader header = 1; // Repsponse header
+	GetMobInfoResponseBody body = 2; // The body of GetMobInfoResponse
+}
+
+/**
+ * Contains the information of a single column
+ */
+message GetMobInfoResponseBody
+{
+	string column_name = 1; // Column name
+	string column_value = 2; // Column value. For clip color, returned value will be in the format "#RRGGBB"
+	string column_value_type = 3; // The type of the column value, such as string, integer, float, etc.
+	bool column_hidden = 4; // True if the column is hidden
+	bool column_is_custom = 5; // True if the column is user custom column
+}
+
+/**
+ * The request of SetMobInfo()
+ */
+message SetMobInfoRequest
+{
+	RequestHeader header = 1; // Request header
+	SetMobInfoRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of SetMobInfoRequest
+ */
+message SetMobInfoRequestBody
+{
+	string mob_id = 1; // SMPTE formatted mob ID strings returned from GetListOfBinItems()
+	ColumnInfo column = 2; // The column to be set
+}
+
+/**
+ * Describes the column info
+ */
+message ColumnInfo {
+	string column_name = 1; // Column name
+
+	// Column value. For columns supported by menu picks, 
+	// the English string will be supported. For clip color, use the format "#RRGGBB"
+	string column_value = 2; 
+}
+
+/**
+ * The response of SetMobInfo
+ */
+message SetMobInfoResponse
+{
+	ResponseHeader header = 1; // Response header
+	SetMobInfoResponseBody body = 2; // The body of SetMobInfoResponse
+}
+
+/**
+ * Contains the information of a single column
+ */
+message SetMobInfoResponseBody
+{
+	repeated MobFailure mob_failure = 1 [deprecated=true];
+
+	// Describes the detail of SetMobInfo failure 
+	message MobFailure {
+		string mob_id = 1; // SMPTE formatted mob ID strings returned from GetListOfBinItems()
+		repeated ColumnInfo failed_columns = 2; // The columns that failed SetMobInfo
+	}
+}
+
+/**
+ * The request of OpenBin()
+ */
+message OpenBinRequest
+{
+	RequestHeader header = 1; // Request header
+	OpenBinRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of OpenBinRequest
+ */
+message OpenBinRequestBody
+{
+	string bin_path = 1; // path can be relative to project folder or an absolute path
+	bool locked = 2; // request for locking the bin upon opening
+}
+
+/**
+ * The response of OpenBin()
+ */
+message  OpenBinResponse
+{
+	ResponseHeader header = 1; // Request header
+	OpenBinResponseBody body = 2; // Request body
+}
+
+/**
+ * The body of OpenBinResponse
+ */
+message OpenBinResponseBody
+{
+	bool is_locked_by_other = 1; // True if the bin is locked by other user, false if it is locked by you.
+	string lock_owner = 2; // The username who is holding the lock of the bin. 
+}
+
+/**
+ * The request of CreateBin
+ */
+message CreateBinRequest
+{
+	RequestHeader header = 1; // Request header
+	CreateBinRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of CreateBinRequest
+ */
+message CreateBinRequestBody
+{
+	string folder_path = 1; // Folder path is in the currently opened project, if folder_path  is empty we create at the root folder of the project
+	string bin_name = 2;  // Bin name
+	OpenBinOption option = 3; // Specifies how the bin should be opened.
+
+	/**
+	 * Specifies how the bin should be opened, as a floating window, or as a new tab in the active Bin Container
+	 */
+	enum OpenBinOption
+	{
+		FloatBin = 0; // Bin will be opened in a floating window 
+		LastActiveBinContainer = 1; // Bin will be opened as a new tab in the last known active Bin Container
+		FollowBinSettings= 2; // Open bin according to Bin settings.
+	}
+}
+
+/**
+ * The response of CreateBin()
+ */
+message CreateBinResponse
+{
+	ResponseHeader header = 1; // Response header
+	CreateBinResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of CreateBinResponse
+ */
+message CreateBinResponseBody
+{
+	
+}
+
+/**
+ * The request of ConfigureSRTStream
+ */
+message ConfigureSRTStreamRequest
+{
+	RequestHeader header = 1; // Request header
+	ConfigureSRTStreamRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of ConfigureSRTStreamRequest
+ */
+message ConfigureSRTStreamRequestBody
+{
+	string stream_name = 1; // Stream name
+	string ip_address = 2;  // IP address
+	int32 port = 3;  // Port
+	string password = 4; // Password
+	int32 latency = 5; // Latency
+	QualityOption quality_option = 6; // Specifies the quality the stream should have.
+	ModeOption mode_option = 7; // Specifies the mode of the stream.
+	optional string secret_suffix = 8; // This is used to make a unique secret string to save or access the password with OS secure storage.	
+	optional bool use_password = 9; // Off by default to be compatible with older releases. Set to true to set the password. If the password is empty, then clear the current password, if any.
+
+	/**
+	 * Specifies the quality the stream should have.
+	 */
+	enum QualityOption
+	{
+		Low = 0; // Low
+		Medium = 1; // Medium
+		High = 2; // High
+	}
+
+	/**
+	 * Specifies the type of the stream.
+	 */
+	enum ModeOption
+	{
+		Listener = 0; // Listener
+		Caller = 1; // Caller
+	}
+}
+
+/**
+ * The response of ConfigureSRTStream()
+ */
+message ConfigureSRTStreamResponse
+{
+	ResponseHeader header = 1; // Response header
+	ConfigureSRTStreamResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of ConfigureSRTStreamResponse
+ */
+message ConfigureSRTStreamResponseBody
+{
+	
+}
+
+/**
+ * The request of GetSRTStreamSettings
+ */
+message GetSRTStreamSettingsRequest
+{
+	RequestHeader header = 1; // Request header
+	GetSRTStreamSettingsRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of GetSRTStreamSettings
+ */
+message GetSRTStreamSettingsRequestBody
+{
+
+}
+
+/**
+ * The response of GetSRTStreamSettings()
+ */
+message GetSRTStreamSettingsResponse
+{
+	ResponseHeader header = 1; // Response header
+	GetSRTStreamSettingsResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of GetSRTStreamSettingsResponse
+ */
+message GetSRTStreamSettingsResponseBody
+{
+	string stream_name = 1; // Stream name
+	string ip_address = 2;  // IP address
+	int32 port = 3;  // Port
+	string password = 4; // Password
+	int32 latency = 5; // Latency
+	QualityOption quality_option = 6; // Specifies the quality the stream should have.
+	ModeOption mode_option = 7; // Specifies the mode of the stream.
+
+	/**
+	 * Specifies the quality the stream should have.
+	 */
+	enum QualityOption
+	{
+		Low = 0; // Low
+		Medium = 1; // Medium
+		High = 2; // High
+	}
+
+	/**
+	 * Specifies the type of the stream.
+	 */
+	enum ModeOption
+	{
+		Listener = 0; // Listener
+		Caller = 1; // Caller
+	}
+}
+
+
+/**
+ * The request of GetOTSSessionStatus
+ */
+message GetOTSSessionStatusRequest
+{
+	RequestHeader header = 1; // Request header
+	GetOTSSessionStatusRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of GetOTSSessionStatusRequest
+ */
+message GetOTSSessionStatusRequestBody
+{
+
+}
+
+/**
+ * The response of GetOTSSessionStatus()
+ */
+message GetOTSSessionStatusResponse
+{
+	ResponseHeader header = 1; // Response header
+	GetOTSSessionStatusResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of GetOTSSessionStatusResponse
+ */
+message GetOTSSessionStatusResponseBody
+{
+	string status = 1; // Session's status
+	string session_id = 2;  // Session's id
+	string creation_date = 3; // Sessions's creation time in ISO
+	string tenant_id = 4; // Tenant id
+	string stream_name = 5; // Stream name
+	string ip_address = 6;  // IP address
+	int32 port = 7;  // Port
+	string password = 8 [deprecated=true]; // Password
+	int32 latency = 9; // Latency
+	QualityOption quality_option = 10; // Specifies the quality the stream should have.
+	ModeOption mode_option = 11; // Specifies the mode of the stream.
+
+		/**
+	 * Specifies the quality the stream should have.
+	 */
+	enum QualityOption
+	{
+		Low = 0; // Low
+		Medium = 1; // Medium
+		High = 2; // High
+	}
+
+	/**
+	 * Specifies the type of the stream.
+	 */
+	enum ModeOption
+	{
+		Listener = 0; // Listener
+		Caller = 1; // Caller
+	}
+}
+
+/**
+ * The request of SetOTSSessionStatus
+ */
+message SetOTSSessionStatusRequest
+{
+	RequestHeader header = 1; // Request header
+	SetOTSSessionStatusRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of SetOTSSessionStatusRequest
+ */
+message SetOTSSessionStatusRequestBody
+{
+	string status = 1; // Session's status
+	string session_id = 2;  // Session's id
+	string tenant_id = 3; // Tenant id
+	string stream_name = 4; // Stream name
+	string ip_address = 5;  // IP address
+	int32 port = 6;  // Port
+	string password = 7 [deprecated=true]; // Password
+	int32 latency = 8; // Latency
+	QualityOption quality_option = 9; // Specifies the quality the stream should have.
+	ModeOption mode_option = 10; // Specifies the mode of the stream.
+
+		/**
+	 * Specifies the quality the stream should have.
+	 */
+	enum QualityOption
+	{
+		Low = 0; // Low
+		Medium = 1; // Medium
+		High = 2; // High
+	}
+
+	/**
+	 * Specifies the type of the stream.
+	 */
+	enum ModeOption
+	{
+		Listener = 0; // Listener
+		Caller = 1; // Caller
+	}
+}
+
+/**
+ * The response of SetOTSSessionStatus()
+ */
+message SetOTSSessionStatusResponse
+{
+	ResponseHeader header = 1; // Response header
+	SetOTSSessionStatusResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of SetOTSSessionStatusResponse
+ */
+message SetOTSSessionStatusResponseBody
+{
+	
+}
+
+/**
+ * The request of GetMediaVolumeList()
+ */
+message GetMediaVolumeListRequest
+{
+	RequestHeader header = 1; // Request header
+	GetMediaVolumeListRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of GetMediaVolumeListRequest
+ */
+message GetMediaVolumeListRequestBody
+{
+	
+}
+
+/**
+ * The response of GetMediaVolumeList
+ */
+message  GetMediaVolumeListResponse
+{
+	ResponseHeader header = 1; // Response header
+	GetMediaVolumeListResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of GetMediaVolumeListResponse
+ */
+message GetMediaVolumeListResponseBody
+{
+	repeated MediaVolume volumes = 1; // The list of Avid media files volume
+
+	/**
+	 * Represents Avid meida files volume. 
+	 */
+	message MediaVolume
+	{
+		string name = 1; // Name of Avid media files volume
+		bool is_shared = 2; // True if the volume resides on shared storage, false otherwise.
+		uint64 free_space = 3; // Volume free space in KB
+	}
+}
+
+/**
+ * The body of GetMediaVolumeItemsRequest
+ */
+message GetMediaVolumeItemsRequestBody
+{
+	string volume_name = 1; // value returned from GetMediaVolumeList()
+    string relative_path = 2; // relative to Avid media files on the volume, use an empty string with `type == OnlyDirectories` to return the first level of media directories for the given volume name
+    VolumeItemFilter type = 3; // volume item filter
+
+    /**
+    * Specifies the type of Avid media files volume items returned from GetMediaVolumeItems()
+    */
+    enum VolumeItemFilter
+    {
+        All = 0; // Both directories and files
+        OnlyDirectories = 1; // Directories only
+        OnlyFiles = 2; // Files only
+    }
+}
+
+
+/**
+ * The request of GetMediaVolumeItems()
+ */
+message GetMediaVolumeItemsRequest
+{
+	RequestHeader header = 1; // Request header
+	GetMediaVolumeItemsRequestBody body = 2; // Request body
+}
+
+/**
+ * The response of GetMediaVolumeItems
+ */
+message  GetMediaVolumeItemsResponse
+{
+	ResponseHeader header = 1; // Response header
+	GetMediaVolumeItemsResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of GetMediaVolumeItemsResponse
+ */
+message GetMediaVolumeItemsResponseBody
+{
+	repeated MediaVolumeItem item = 1;
+	message MediaVolumeItem
+	{
+		string relative_volume_path = 1; // relative path from the media volume. For example: 
+		bool is_directory = 2; // true if the item is a directory, false otherwise
+	}
+}
+
+/**
+ * Represents the request of GetOpenProjectInfo
+ */
+message GetOpenProjectInfoRequest
+{
+	RequestHeader header = 1; // request header
+	GetOpenProjectInfoRequestBody body = 2; // request body
+}
+
+/**
+ * Represents the body of GetOpenProjectInfo
+ */
+message GetOpenProjectInfoRequestBody
+{
+
+}
+
+/**
+ * The response of GetOpenProjectInfo
+ */
+message GetOpenProjectInfoResponse
+{
+	ResponseHeader header  = 1; // response header
+	GetOpenProjectInfoResponseBody body= 2; // response body
+}
+
+/**
+ * The body of GetOpenProjectInfoResponse
+ */
+message GetOpenProjectInfoResponseBody
+{
+	string path = 1; // full path of the project
+	string project_type = 2; // eg. 1080p/50
+	FrameRate frame_rate = 3; // frame rate
+	string color_space = 4; // color space
+	int32 raster_width = 5;	// raster width
+	int32 raster_height = 6; // raster height
+	Stereoscopic stereoscopic = 7; // stereoscopic type
+	bool drop_frame = 8; // drop frame
+	Timestamp creation_date = 9; // project's creation time
+	Timestamp modify_date = 10; // project's last modified time
+	bool film = 11; // is it a film project
+	string film_perf = 12; // film perf
+}
+
+/**
+ * The request of GetCustomProjectData
+ */
+message GetCustomProjectDataRequest
+{
+	RequestHeader header = 1; // request header
+	GetCustomProjectDataRequestBody body = 2; // request body
+}
+
+/**
+ * The body of GetCustomProjectDataRequest
+ */
+message GetCustomProjectDataRequestBody
+{
+	string data_id = 1;
+	string data_key = 2; // Include vendor prefix from manifest file as part of the key
+}
+
+/**
+ * The response of GetCustomProjectData
+ */
+message GetCustomProjectDataResponse
+{
+	ResponseHeader header  = 1; // response header
+	GetCustomProjectDataResponseBody body= 2; // response body
+}
+
+/**
+ * The body of GetCustomProjectDataResponse
+ */
+message GetCustomProjectDataResponseBody
+{
+	string data_value = 1; // value associated with the GetCustomProjectData request's key 
+}
+
+/**
+ * The request of SetCustomProjectData
+ */
+message SetCustomProjectDataRequest
+{
+	RequestHeader header = 1; // request header
+	SetCustomProjectDataRequestBody body = 2; // request body
+}
+
+/**
+ * The body of SetCustomProjectDataRequest
+ */
+message SetCustomProjectDataRequestBody
+{
+	string data_id = 1;
+	string data_key = 2; // Include vendor prefix from manifest file as part of the key
+	string data_value = 3; // the data associated with the key
+}
+
+/**
+ * The response of SetCustomProjectData
+ */
+message SetCustomProjectDataResponse
+{
+	ResponseHeader header  = 1; // response header
+	SetCustomProjectDataResponseBody body= 2; // response body
+}
+
+/**
+ * The body of SetCustomProjectDataResponse
+ */
+message SetCustomProjectDataResponseBody
+{
+
+}
+
+/**
+ * Frame rate.
+ */
+message FrameRate
+{
+	int32 num = 1; // numerator
+	int32 den = 2; // denominator
+}
+
+/**
+ * Stereoscopic types
+ */
+enum Stereoscopic
+{
+	Undef = 0; // Undefined
+	Monoscopic= 1; // Off
+	MonoLeft = 2; // Left eye only
+	MonoRight = 3; // Right eye only
+	MonoLeadingEye = 4; // Leading eye
+	HalfResX = 5; // Side by side
+	HalfResY = 6; // Over/Under
+	Full = 7; // Full
+}
+
+/**
+ * The request of ScanAvidMediaFilesFolder
+ */
+message ScanAvidMediaFilesFolderRequest
+{
+	RequestHeader header = 1; // request header
+	ScanAvidMediaFilesFolderRequestBody body = 2; // request body
+}
+
+/**
+ * The body of ScanAvidMediaFilesFolderRequest
+ */
+message ScanAvidMediaFilesFolderRequestBody
+{
+	string destination_path = 1; // within Avid media file path folder. Must contain a number
+}
+
+/**
+ * The response of ScanAvidMediaFilesFolder
+ */
+message ScanAvidMediaFilesFolderResponse
+{
+	ResponseHeader header  = 1; // response header
+	ScanAvidMediaFilesFolderResponseBody body = 2; // response body
+}
+
+/**
+ * The body of ScanAvidMediaFilesFolderResponse
+ */
+message ScanAvidMediaFilesFolderResponseBody
+{
+
+}
+
+/**
+* Structure that describes CreateClipsFromAvidMediaFilesFolder request.
+*/
+message CreateClipsFromAvidMediaFilesFolderRequest
+{
+	RequestHeader header = 1; // request header
+	CreateClipsFromAvidMediaFilesFolderRequestBody body = 2; // request body
+}
+
+/**
+* Structure that describes the body of CreateClipsFromAvidMediaFilesFolderRequest.
+*/
+message CreateClipsFromAvidMediaFilesFolderRequestBody
+{
+	string bin_path = 1; // Path can be relative to project folder or an absolute path. The bin must be opened.
+	string media_folder_path = 2; // within Avid media file absolute path folder. Must contain a number
+	repeated string media_file_path = 3; // relative paths without ".." to media file in media folder, if empty all clips in folder will be added
+}
+
+/**
+* Structure that describes CreateClipsFromAvidMediaFilesFolder response.
+*/
+message CreateClipsFromAvidMediaFilesFolderResponse
+{
+	ResponseHeader header = 1; // response header
+	CreateClipsFromAvidMediaFilesFolderResponseBody body = 2; // response body
+}
+
+/**
+* Structure that describes CreateClipsFromAvidMediaFilesFolder response.
+*/
+message CreateClipsFromAvidMediaFilesFolderResponseBody
+{
+}
+
+
+/**
+ * The request of CreateCustomColumn
+ */
+message CreateCustomColumnRequest
+{
+	RequestHeader header = 1; // request header
+	CreateCustomColumnRequestBody body = 2; // request body
+}
+
+
+/**
+ * The body of CreateCustomColumnRequest
+ */
+message CreateCustomColumnRequestBody
+{
+	string absolute_bin_path = 1; // The bin must be opened.
+	string new_column_name = 2;
+	string after_column_name = 3; // If empty or not found, new column will be at the far right.
+	bool column_hidden = 4; // If true, new column will be hidden
+}
+
+/**
+ * The response of CreateCustomColumn
+ */
+message CreateCustomColumnResponse
+{
+	ResponseHeader header  = 1; // response header
+	CreateCustomColumnResponseBody body = 2; // response body
+}
+
+/**
+ * The body of CreateCustomColumnResponse
+ */
+message CreateCustomColumnResponseBody
+{
+	
+}
+
+
+
+/**
+ * The request of GetListOfExportEDLSettings
+ */
+message GetListOfExportEDLSettingsRequest
+{
+	RequestHeader header = 1; // request header
+	GetListOfExportEDLSettingsRequestBody body = 2; // request body
+}
+
+
+/**
+ * The body of GetListOfExportEDLSettingsRequest
+ */
+message GetListOfExportEDLSettingsRequestBody
+{
+}
+
+/**
+ * The response of GetListOfExportEDLSettings
+ */
+message GetListOfExportEDLSettingsResponse
+{
+	ResponseHeader header  = 1; // response header
+	GetListOfExportEDLSettingsResponseBody body = 2; // response body
+}
+
+/**
+ * The body of GetListOfExportEDLSettingsResponse
+ */
+message GetListOfExportEDLSettingsResponseBody
+{
+	repeated string setting_names = 1; // List Tool EDL settings
+}
+
+
+/**
+* Structure that describes ExportEDL request message.
+*/
+message ExportEDLRequest
+{
+	RequestHeader header = 1; // request header
+	ExportEDLRequestBody body = 2; // request body
+}
+
+/**
+* Structure that describes the body of ExportEDLRequest.
+*/
+message ExportEDLRequestBody
+{
+	string mob_id = 1; // mobID of a sequence.
+	string edl_settings_name = 2; // Name of an already-existing EDL-specific setting from the MC List Tool. If empty or incorrect, default EDL setting is used.
+	TrackList track_list = 3; // If track list is empty, EDL will contain all sequence tracks. Only include picture, sound, and data tracks.
+}
+
+message TrackList 
+{
+	repeated TrackLabel track_labels = 1;
+}
+
+message TrackLabel
+{
+	TrackType type = 1; 
+	uint32 number = 2;
+}
+
+enum TrackType
+{
+	TRACKTYPE_PICTURE = 0;
+	TRACKTYPE_SOUND = 1;
+	TRACKTYPE_TIMECODE = 2;
+	TRACKTYPE_EDGECODE = 3;
+	TRACKTYPE_DATA = 4;
+}
+
+enum AudioTrackType
+{
+	UNSPECIFIED_TRACK_FORMAT = 0;
+	MONO_AUDIO_TRACK_FORMAT = 1;
+	STEREO_AUDIO_TRACK_FORMAT = 2;
+	AUDIO_5_1_TRACK_FORMAT = 3;
+	AUDIO_7_1_TRACK_FORMAT = 4;
+	WIDEST_AUDIO_TRACK_FORMAT = 5;
+}
+
+/**
+* Structure that describes ExportEDL response message.
+*/
+message ExportEDLResponse
+{
+	ResponseHeader header = 1; // response header
+	ExportEDLResponseBody body = 2; // response body
+}
+
+/**
+* Structure that describes ExportEDL response data.
+*/
+message ExportEDLResponseBody
+{
+	string path = 1; // path to a local file containing exported EDL
+	repeated string dialog_contents = 2 [deprecated=true];  // contents of dialogs suppressed during EDL generation, if any
+}
+
+
+message GetMobTrackInfoRequest
+{
+	RequestHeader header = 1; // request header
+	GetMobTrackInfoRequestBody body = 2; // request body
+}
+
+/**
+ * The body of GetMobTrackInfoRequest
+ */
+ message GetMobTrackInfoRequestBody
+ {
+	string mob_id = 1; // SMPTE formatted mob ID string returned from GetMobContent()
+ }
+ 
+ 
+message GetMobTrackInfoResponse
+{
+	ResponseHeader header  = 1; // response header
+	GetMobTrackInfoResponseBody body = 2; // request body
+}
+
+
+message TrackInfo 
+{
+	TrackLabel label = 1;
+	string custom_name = 2; // Default for track will not ahve any custom name.
+	bool selected = 3;
+	bool monitored = 4; // Only one Video track can be monitored at a time.
+	bool enabled = 5; // TODO: Talk to Jeff about voices and how to represent that here!
+	bool solo = 6;
+	bool mute = 7;
+	bool locked = 8;
+	bool sync_locked = 9;
+	int32 num_segments = 10; // Number of segments on the track.
+	AudioTrackType audio_type = 11; 
+}
+
+message TrackInfoList
+{
+	repeated TrackInfo track_info = 1;
+}
+
+message GetMobTrackInfoResponseBody 
+{
+	TrackInfoList track_info_list = 1;
+}
+
+/**
+* Common data of request message.
+*/
+message RequestHeader
+{
+	string company_id = 1; // The id of the company
+	string access_token = 2; // mcapi_access_token from cookie
+}
+
+/**
+* Common data of response message.
+*/
+message ResponseHeader
+{
+	string task_id = 1;		// unique identifier for each command
+	TaskStatus status = 3 [deprecated=true];	// status of command execution
+	int32 progress = 4;		// progress of command execution in percentage
+	CommandError error = 5 [deprecated=true]; // The error 
+	repeated string warnings = 6; // list of warnings
+}
+
+// @exclude TODO remove this message after we upload all the Google protobuf to Nexus
+message Timestamp {
+  // Represents seconds of UTC time since Unix epoch
+  // 1970-01-01T00:00:00Z. Must be from 0001-01-01T00:00:00Z to
+  // 9999-12-31T23:59:59Z inclusive.
+  int64 seconds = 1;
+
+  // Non-negative fractions of a second at nanosecond resolution. Negative
+  // second values with fractions must still have non-negative nanos values
+  // that count forward in time. Must be from 0 to 999,999,999
+  // inclusive.
+  int32 nanos = 2;
+}
+
+/**
+* Common data of the error message.
+*/
+message CommandError
+{
+	CommandErrorType command_error_type = 1;	// type of the possible command error
+	string command_error_message = 2;			// error or warning message
+	bool is_warning = 3;						// if error is defined as a warning, command execution should be completed successfully 
+}
+
+
+/**
+* Type of the error message which can be returned to user.
+* It can be OS error or Media Composer error.
+*/
+enum CommandErrorType
+{
+	NoError = 0;								// operation succeeded or started successfully
+
+	OS_WritePermissions = 1;					// command hits write permissions
+	OS_DirectoryPathNotFound = 2;				// the specified location does not exist
+	OS_FilePathLocation = 3;					// the specified file path could not be found
+	OS_DuplicateName = 4;						// the session name to be created is a duplicate of some existing
+	OS_ReadError = 5;							// command hits read permissions or can not read specified file
+	OS_DiskSpace = 6;							// not enough free space on disk 
+	OS_IllegalCharacters = 7;					// the session name contains illegal characters/symbols
+	OS_CharactersLimit = 8;						// the session/track name is too long (250 characters allowed)
+	OS_FileNotFound = 9;						// the specified file location does not exist
+	OS_TimeOut = 10;							// time out
+	OS_FileOpenFailed = 11;						// the specified file could not be open
+	OS_DirectoryCannotBeCreated = 12;			// The directory cannot be created
+	MC_BinNotOpened = 50;						// The bin was not opened. 
+	MC_FileExists =51;							// The file already exists
+	MC_DownloadFailed = 52;						// The download was failed
+	MC_MobNotFound = 53;						// The mod ID is not found
+	MC_BinColumnNotFound = 54;					// The bin column is not found
+	MC_BinElementIsNotModifiable = 55;			// The bin element is not modifiable
+	MC_ProjectDataIdIsNotValid = 56;			// Custom project data Id is not valid or empty
+	MC_ProjectDatakeyIsNotValid = 57;			// Custom project data key is not valid or empty
+	MC_AccessTokenIsNotValid = 58;				// Access token is not valid or empty
+	MC_EDLSettingsNotFound = 59;				// No EDL List Tool settings were found
+	MC_ExportSettingsNotFound = 60;				// No Export settings were found
+	MC_ImportSettingsNotFound = 61;				// No Import settings were found
+	MC_MissedParameter = 62;					// Mandatory message parameter is empty
+	MC_ImportFileFailed = 63;					// The import file was failed
+	MC_ExportFileFailed = 64;					// The export file was failed
+	MC_ShutDown = 65;							// The server was shut down
+	MC_InvalidArgument = 66;					// Used argument is not correct
+	MC_AddMarkerFailed = 67;					// Add marker finished not successfully
+	MC_ParseFileFailed = 68;					// The file could not be parsed
+	MC_BinNotFound = 69;						// Bin file is not found in the OS file system
+	MC_InternalError = 70;						// Internal implementation error
+	MC_ProjectNotOpen = 71;						// Project is not opened
+	MC_InvalidMobID = 72;						// Mob ID is in incorrect format
+	MC_MediaComposerIsBusy = 73;				// Media Composer is busy or modial dialog is active
+	MC_EDLComposeFailed = 74;					// EDL Compose failed
+	MC_EDLDecomposeFailed = 75;					// EDL Decompose failed
+	MC_EDLNotSuportedFrameRate = 76;			// EDL unsupported frame rate
+	MC_BinIsLocked = 77;						// Bin is locked			
+	MC_LinkSettingsNotFound = 78;				// No Link settings were found
+	MC_MarkerNotFound = 79;						// Marker coul dnot be found
+	MC_MarkerCollision = 80;					// Marker collision
+	MC_WindowTypeInvalid = 81;					// Invalid window Type
+	MC_NoActiveWindowFound = 82;				// No active window found
+	MC_WindowNotFound = 83;						// Window not found
+	MC_WindowHiddenOrClosed = 84;				// Window is hidden or closed
+
+	MC_UnknownError = 1000;						// Unknown error
+}
+
+/**
+* Status of execution of the MC task.
+*/
+enum TaskStatus
+{
+	Queued = 0; // Waiting for a request to come in.
+	Pending = 1; // The request was received, waiting to be processed.
+	InProgress = 2; // The request is being processed.
+	Completed = 3; // The request was completed successfully.
+	Failed = 4; // The request was failed with a error.
+	WaitingForUserInput = 5;	// need wait for user input, for example if MC license required
+}
+
+enum ExportFileOption
+{
+	Export_StopIf_MixedAudio = 0; //Stop the Export if mixed audio sample rates are detected. (exported file may not be playable in other applications)
+	Export_StopIf_OfflineMedia = 1; //Stop the Export if mob contains offline media
+	Export_StopIf_UnknownFX = 2; //Stop the Export if sequence contains unloaded or unknown effects
+	Export_StopIf_LongGOP = 3; //Stop the Export if a clip contains LongGOP media. Such media is not supported for embedded export. If export continues, such media will not be added to the exported file.
+	Export_StopIf_NonNative = 4; //Stop the Export if the linked clip contains non-native media. Such media is not supported for embedded export. If export continues, such media will not be added to the exported file.
+	Export_StopIf_32kHzAudio = 5; //Stop the Export if mob  contains 32kHz audio
+	Export_OMF_Audio_To_WAVE = 6; // If the OMF export setting spec for audio is not currently supported, continue export and convert audio to WAVE.
+	Export_OMF_Audio_To_AIFFC = 7; // If the OMF export setting spec for audio is not currently supported, continue export and convert audio to AIFFC.
+	Export_Conver_Audio_To_PCM = 8; // If the embedded AAF export setting for audio is not currently supported, continue export and convert audio to PCM.
+	Export_StopIf_Color_Will_Not_Seen_In_Quick_Time_Reference = 9; // If the sequence contains color correction, and it will thus not be seen in the QT reference, stop the export.
+	Export_StopIf_Cannot_Export_Mixed_Resolution_Sequence = 10; // If the AVI export setting spec uses Source Compression and it's a mixed resolution sequence, stop the export (would take long).
+	Export_Keep_Partial_Render = 11; // If export stops while rendering effects, then keep the partial render.
+	Export_StopIf_Some_Audio_Clips_Do_Not_Match_Current_Hardware_Or_Software_Sample_Rate = 12; // If audio clips that do not match HW/SW rate are present and will thus be rendered as silent, stop the export.
+	Export_StopIf_Current_Master_Fader_Format_Cannot_Accomodate_Surround_Or_7_1_Surround_Tracks = 13; // If the current master fader format cannot accomodate surround or 7.1 tracks and the master fader gain and effects will thus not be applied, stop the export.
+	Export_StopIf_Some_Clips_Dont_Have_High_Resolution_Video_Available = 14; // If some clips do not have High Resolution video, don't use proxy - stop the export.
+}
+
+enum ImportFileOption
+{
+	Import_StopIf_Media_No_in_DB = 0; //
+
+}
+
+/**
+* Structure that describes ExportFile request message.
+*/
+message ExportFileRequest
+{
+	RequestHeader header = 1; // request header
+	ExportFileRequestBody body = 2; // request body
+}
+
+/**
+* Structure that describes the body of ExportFileRequest.
+*/
+message ExportFileRequestBody
+{
+	string mob_id = 1; // mobID of a sequence.
+	string file_name = 2; // Name of file with will be created, If empty use default name.
+	string export_settings_name = 3; // Name of an already-existing export-specific setting from the MC. If empty or incorrect, default Export setting is used.
+	string destination_path = 4; // If empty, then use appropriate user's directory.
+	string in_directory = 5; // If not empty, export will create and use this named directory in the destination_path. (Mainly useful for export with multiple files)
+	repeated ExportFileOption option_flags = 6;
+
+}
+
+/**
+* Structure that describes ExportFile response message.
+*/
+message ExportFileResponse
+{
+	ResponseHeader header = 1; // response header
+	ExportFileResponseBody body = 2; // response body
+}
+
+/**
+* Structure that describes ExportFile response data.
+*/
+message ExportFileResponseBody
+{
+	string path = 1 [deprecated=true]; // path to a local file or subfolder containing mulitiple files.
+}
+
+/**
+* Structure that describes ImportFile request message.
+*/
+message ImportFileRequest
+{
+	RequestHeader header = 1; // request header
+	ImportFileRequestBody body = 2; // request body
+}
+
+/**
+* Structure that describes the body of ImportFileRequest.
+*/
+message ImportFileRequestBody
+{
+	string file_path = 1; // path to file that is to be imported
+	string import_settings_name = 2; // Name of an already-existing import-specific setting from the MC. If empty or incorrect, default import setting is used.
+	string destination_video_drive = 3; // If empty, then use default Media Creation settings.
+	string destination_audio_drive = 4; // If empty, then use default Media Creation settings.
+	string compression = 5; // If empty, then use default Media Creation settings.
+	string video_wrapper_format = 6; // If empty, then use default Media Creation settings. 
+	string audio_wrapper_format = 7; // If empty, then use default Media Creation settings.
+	string destination_bin = 8; // relative path to destination bin 
+	repeated ImportFileOption option_flags = 9;
+}
+
+/**
+* Structure that describes ImportFile response message.
+*/
+message ImportFileResponse
+{
+	ResponseHeader header = 1; // response header
+	ImportFileResponseBody body = 2; // response body
+}
+
+/**
+* Structure that describes ImportFile response data.
+*/
+message ImportFileResponseBody
+{
+	string mob_id = 1 [deprecated=true];
+}
+
+message LoadSettingRequest
+{
+	RequestHeader header = 1; // Request header
+	LoadSettingRequestBody body = 2; // Request body
+}
+
+message LoadSettingRequestBody
+{
+	string unique_id = 1; // A unique identifier for this set of settings. This could be a guid or any other unique string
+	string xml_setting = 2; // xml data created in Media Composer. See documentation.
+}
+
+
+message LoadSettingResponse
+{
+	ResponseHeader header = 1; // Request header
+}
+
+/**
+ * The request of GetListOfExportSettings
+ */
+ message GetListOfExportSettingsRequest
+ {
+ 	RequestHeader header = 1; // request header
+ 	GetListOfExportSettingsRequestBody body = 2; // request body
+ }
+
+
+/**
+ * The body of GetListOfExportSettingsRequest
+ */
+ message GetListOfExportSettingsRequestBody
+ {
+ }
+
+/**
+ * The response of GetListOfExportSettings
+ */
+ message GetListOfExportSettingsResponse
+ {
+ 	ResponseHeader header  = 1; // response header
+ 	GetListOfExportSettingsResponseBody body = 2; // response body
+ }
+
+/**
+ * The body of GetListOfExportSettingsResponse
+ */
+ message GetListOfExportSettingsResponseBody
+ {
+ 	repeated string setting_names = 1; // export settings
+ }
+ 
+ /**
+ * The request of GetListOfImportSettings
+ */
+ message GetListOfImportSettingsRequest
+ {
+ 	RequestHeader header = 1; // request header
+ 	GetListOfImportSettingsRequestBody body = 2; // request body
+ }
+
+
+/**
+ * The body of GetListOfImportSettingsRequest
+ */
+ message GetListOfImportSettingsRequestBody
+ {
+ }
+
+/**
+ * The response of GetListOfImportSettings
+ */
+ message GetListOfImportSettingsResponse
+ {
+ 	ResponseHeader header  = 1; // response header
+ 	GetListOfImportSettingsResponseBody body = 2; // response body
+ }
+
+/**
+ * The body of GetListOfImportSettingsResponse
+ */
+ message GetListOfImportSettingsResponseBody
+ {
+ 	repeated string setting_names = 1; // import settings
+ }
+
+  /**
+ * The request of AddMarker
+ */
+ message AddMarkerRequest
+ {
+ 	RequestHeader header = 1; // request header
+ 	AddMarkerRequestBody body = 2; // request body
+ }
+
+/**
+* Colors of markers
+*/
+ enum MarkerColor
+{
+	Red = 0;
+	Green = 1;
+	Blue = 2;
+	Cyan = 3;
+	Magenta = 4;
+	Yellow = 5;
+	Black = 6;
+	White = 7;
+	NearWhite = 8;
+	Pink = 9;
+	Forest = 10;
+	Denim = 11;
+	Violet = 12;
+	Purple = 13;
+	Orange = 14;
+	Grey = 15;
+	Gold = 16;
+}
+
+/**
+ * The body of AddMarkerRequest
+ */
+ message AddMarkerRequestBody
+ {
+	string mob_id = 1;
+	TrackLabel track_label = 2; //destination track for new marker.  Spanned markers can only be created on the TC track.
+	int32 offset = 3; // if >= 0 this will be used for marker position, if < 0 the timecode value will be used for marker position
+	string timecode = 4; // Timeline timecode position eg. "00:00:00:00", but see offset note above.
+	int32 length = 5; //# of frames. For regular markers, use 1.  Greater than 1 is used for spanned markers.
+	string comment = 6; // Marker text.
+	MarkerColor color = 7; // Marker color.  Note that Media Composer considers the color to be indicative of priority, though users may not use color this way.
+	string name = 8; // Name of the marker.  
+	string guid = 9; // Usually the string representation of a standard UUID/GUID.
+	string user = 10;  // An username, optional. Usually when a user creates a marker this defaults to their OS login name, but it can be used in other ways.
+	optional string svg_annotation = 11; // SVG annotation, May be displayed as an frame overlay on Marker Tool and Monitors.
+ }
+
+/**
+ * The response of AddMarker
+ */
+ message AddMarkerResponse
+ {
+ 	ResponseHeader header  = 1; // response header
+ 	AddMarkerResponseBody body = 2; // response body
+ }
+
+/**
+ * The body of AddMarkerResponse
+ */
+ message AddMarkerResponseBody
+ {
+	string guid = 1; // the string representation of a standard UUID/GUID for just created marker
+ }
+
+ enum ViewerType
+{
+	Source = 0; // can display clips or sequences
+	Record = 1; // can display only sequences
+	Popup = 2; // can display clips or sequences
+	Center = 3; // can display only sequences (returned when editor is in Color Correction mode)
+}
+
+message LoadMobsIntoViewerRequest
+{
+	RequestHeader header = 1; // Request header
+	LoadMobsIntoViewerRequestBody body = 2; // Request body
+}
+message LoadMobsIntoViewerRequestBody
+{
+	repeated string mob_ids = 1; // array of mob ids to load into monitor
+	ViewerType view_type = 2; // which monitor to load into
+}
+
+message LoadMobsIntoViewerResponse
+{
+	ResponseHeader header = 1; // Request header
+	LoadMobsIntoViewerResponseBody body = 2; // Request body
+}
+
+message LoadMobsIntoViewerResponseBody
+{
+	
+}
+
+message SelectMobsInBinRequest
+{
+	RequestHeader header = 1; // Request header
+	SelectMobsInBinRequestBody body = 2; // Request body
+}
+
+message SelectMobsInBinRequestBody
+{
+	string bin_path = 1; // path can be relative to project folder or an absolute path
+	repeated string mob_ids = 2; // array of mob ids to select
+	bool add_to_selection = 3; // true - add mob id to current selection, false - clear current selection first
+}
+
+message SelectMobsInBinResponse
+{
+	ResponseHeader header = 1; // Request header
+	SelectMobsInBinResponseBody body = 2; // Request body
+}
+
+message SelectMobsInBinResponseBody
+{
+	repeated string selected_mob_ids = 1; // List of correctly selected mobs from request.
+}
+
+message GetViewerMobsRequest
+{
+	RequestHeader header = 1; // Request header
+	GetViewerMobsRequestBody body = 2; // Request body
+}
+message GetViewerMobsRequestBody
+{
+}
+
+message GetViewerMobsResponse
+{
+	ResponseHeader header = 1; // Request header
+	GetViewerMobsResponseBody body = 2; // Request body
+}
+
+message MobInViewer
+{
+	string mob_id = 1;
+	ViewerType view_type = 2;
+	int32 current_frame = 3;
+	string current_timecode = 4;
+}
+
+message GetViewerMobsResponseBody
+{
+	repeated MobInViewer mobs = 1;
+}
+
+message GetBinFromMobRequest
+{
+	RequestHeader header = 1; // Request header
+	GetBinFromMobRequestBody body = 2; // Request body
+}
+message GetBinFromMobRequestBody
+{
+	string mob_id = 1;
+}
+
+message GetBinFromMobResponse
+{
+	ResponseHeader header = 1; // Request header
+	GetBinFromMobResponseBody body = 2; // Request body
+}
+
+message GetBinFromMobResponseBody
+{
+	string absolute_path = 1;
+}
+
+message AddMarkersRequest
+{
+	RequestHeader header = 1; // Request header
+	AddMarkersRequestBody body = 2; // Request body
+}
+
+message RequestMarkerInfo
+{
+	string name = 1; // Name of the marker.  
+	TrackLabel track_label = 2; //destination track for new marker.  Spanned markers can only be created on the TC track.
+	int32 offset = 3; // if >= 0 this will be used for marker position, if < 0 the timecode value will be used for marker position
+	string timecode = 4; // Timeline timecode position eg. "00:00:00:00", but see offset note above.
+	int32 length = 5; //# of frames. For regular markers, use 1.  Greater than 1 is used for spanned markers.
+	string comment = 6; // Marker text.
+	MarkerColor color = 7; // Marker color.  Note that Media Composer considers the color to be indicative of priority, though users may not use color this way.
+	string guid = 8; // Usually the string representation of a standard UUID/GUID, optional
+	string user = 9; // An username, optional. Usually when a user creates a marker this defaults to their OS login name, but it can be used in other ways.
+	optional string svg_annotation = 10; // SVG annotation, May be displayed as an frame overlay on Marker Tool and Monitors, optional
+}
+
+message AddMarkersRequestBody
+{
+	string mob_id = 1; // mob id
+	repeated RequestMarkerInfo info = 2; // array of marker info
+}
+
+message AddMarkersResponse
+{
+	ResponseHeader header = 1; // Response header
+	AddMarkersResponseBody body = 2; // Response body
+}
+
+message AddMarkersResponseBody
+{
+
+}
+
+message GetMarkersRequest
+{
+	RequestHeader header = 1; // Request header
+	GetMarkersRequestBody body = 2; // Request body
+}
+
+message GetMarkersRequestBody
+{
+	string mob_id = 1; // mob id
+	string guid = 2; // select specified marker GUID only, optional
+
+	oneof range { // select markers within specified range, optional
+		offsetFilter offset = 3;  // frame offset and length
+		tcFilter timecode = 4; // timecode range
+	}
+
+	oneof track_filter {
+		TrackLabel track = 5; // select markers for specified track only, optional
+	}
+
+	optional bool include_svg_annotation = 6;
+
+	message offsetFilter
+	{
+		int32 frame = 1;
+		int32 length = 2;
+	}
+	
+	message tcFilter
+	{
+		string start = 1; // starting timecode position eg. "01:00:00:00"
+		string duration = 2; // timecode duration eg. "00:00:01:00"
+	}
+}
+
+message GetMarkersResponse
+{
+	ResponseHeader header = 1; // Response header
+	GetMarkersResponseBody body = 2; // Response body
+}
+
+message ResponseMarkerInfo
+{
+	string name = 1;
+	TrackLabel track_label = 2;
+	int32 offset = 3;
+	string timecode = 4;
+	int32 length = 5;
+	string comment = 6;
+	MarkerColor color = 7;
+	Timestamp creation_date = 8;
+	string guid = 9;
+	string user = 10;
+	optional string svg_annotation = 11;
+}
+
+message GetMarkersResponseBody
+{
+	repeated ResponseMarkerInfo info = 2; // array of marker info
+}
+
+message ChangeMarkerRequest
+{
+	RequestHeader header = 1; // Request header
+	ChangeMarkerRequestBody body = 2; // Request body
+}
+
+message ChangeMarkerRequestBody
+{
+	string mob_id = 1; // mob id
+	string guid = 2; // marker GUID
+	MarkerInfo info = 3; // mutable marker info
+
+	message MarkerInfo
+	{ 
+		string name = 1; // Name of the marker.  
+		string comment = 2; // Marker text.
+		MarkerColor color = 3; // Marker color.  Note that Media Composer considers the color to be indicative of priority, though users may not use color this way.
+		TrackLabel track_label = 4; // Marker track type and number.  Spanned markers can only be placed on the TC track.
+		string user = 5; // An username, optional.
+		optional string svg_annotation = 6; // Optionally add or replace an svg annotation.
+	}
+	optional bool include_svg_annotation = 4; // If true and info.svg_annotation is empty, then existing annotation will be removed.
+}
+
+message ChangeMarkerResponse
+{
+	ResponseHeader header = 1; // Response header
+	ChangeMarkerResponseBody body = 2; // Response body
+}
+
+message ChangeMarkerResponseBody
+{
+}
+
+message CreateSubClipRequest
+{
+	RequestHeader header = 1; // Request header
+	CreateSubClipRequestBody body = 2; // Request body
+}
+
+message CreateSubClipRequestBody
+{
+	string destination_bin_path = 1; // Path can be relative to project folder or an absolute path.
+	string mob_id = 2; // SMPTE formatted mob ID strings returned from GetListOfBinItems().
+	TrackList track_list = 3; // If track list is empty, CreateSubClip will use all avaliable tracks.
+	bool use_clip_bounds = 4; // This bounds can be overwritten by head_frame/end_frame, head_timecode/end_timecode.
+	bool use_marks_bounds = 5; // This bounds can be overwritten by head_frame/end_frame, head_timecode/end_timecode.
+	int32 head_frame = 6; // Is used when head_frame >= 0, can be overwritten by head_timecode.
+	string head_timecode = 7; // Is used when is not empty.
+	int32 end_frame = 8; // Is used when end_frame >= 0, can be overwritten by end_timecode.
+	string end_timecode = 9; // Is used when is not empty.
+	int32 add_frames_at_head = 10; // Negative values can be applied to remove frames from the head. Only available frames can be added/removed
+	int32 add_frames_at_end = 11; // Negative values can be applied to remove frames from the tail. Only available frames can be added/removed
+	bool retain_marks = 12; // Works only for sub clips.
+	bool retain_markers = 13; // Include the clip's markers in the new subclip.
+	bool create_new_sequence = 14; // Only for sequence. A new sequence using the newly created subclips will be added to the destination bin
+	bool enabled_tracks_only = 15; // Only for sequence. When enabled, subclips are created based on track selection in the timeline. When disabled, all tracks in the sequence are used
+}
+
+message CreateSubClipResponse
+{
+	ResponseHeader header = 1; // Request header
+	CreateSubClipResponseBody body = 2; // Request body
+}
+
+message CreateSubClipResponseBody
+{
+
+}
+	
+/**
+ * The request of CloseBin()
+ */
+message CloseBinRequest
+{
+	RequestHeader header = 1; // Request header
+	CloseBinRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of CloseBinRequest
+ */
+message CloseBinRequestBody
+{
+	string bin_path = 1; // path can be relative to project folder or an absolute path
+}
+
+/**
+ * The response of CloseBin()
+ */
+message  CloseBinResponse
+{
+	ResponseHeader header = 1; // Request header
+	CloseBinResponseBody body = 2; // Request body
+}
+
+/**
+ * The body of CloseBinResponse
+ */
+message CloseBinResponseBody
+{
+
+}
+
+/**
+ * The request of MoveBinItems()
+ */
+message MoveBinItemsRequest
+{
+	RequestHeader header = 1; // Request header
+	MoveBinItemsRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of MoveBinItemsRequest
+ */
+message MoveBinItemsRequestBody
+{
+	string source_bin_path = 1; // path can be relative to project folder or an absolute path
+	string destination_bin_path = 2; // path can be relative to project folder or an absolute path
+	repeated string mob_id = 3; // SMPTE formatted mob ID strings returned from GetListOfBinItems().
+}
+
+/**
+ * The response of MoveBinItems()
+ */
+message  MoveBinItemsResponse
+{
+	ResponseHeader header = 1; // Request header
+	MoveBinItemsResponseBody body = 2; // Request body
+}
+
+/**
+ * The body of MoveBinItemsResponse
+ */
+message MoveBinItemsResponseBody
+{
+	repeated string mob_id = 3; // Correctly moved mobs
+}
+
+/**
+ * The request of CopyBinItems()
+ */
+message CopyBinItemsRequest
+{
+	RequestHeader header = 1; // Request header
+	CopyBinItemsRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of CopyBinItemsRequest
+ */
+message CopyBinItemsRequestBody
+{
+	string source_bin_path = 1; // path can be relative to project folder or an absolute path
+	string destination_bin_path = 2; // path can be relative to project folder or an absolute path
+	repeated string mob_id = 3; // SMPTE formatted mob ID strings returned from GetListOfBinItems().
+}
+
+/**
+ * The response of CopyBinItems()
+ */
+message  CopyBinItemsResponse
+{
+	ResponseHeader header = 1; // Request header
+	CopyBinItemsResponseBody body = 2; // Request body
+}
+
+/**
+ * The body of CopyBinItemsResponse
+ */
+message CopyBinItemsResponseBody
+{
+	repeated string mob_id = 3; // Newly created mobs
+}
+
+/**
+ * The request of DuplicateBinItems()
+ */
+message DuplicateBinItemsRequest
+{
+	RequestHeader header = 1; // Request header
+	DuplicateBinItemsRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of DuplicateBinItemsRequest
+ */
+message DuplicateBinItemsRequestBody
+{
+	string bin_path = 1; // path can be relative to project folder or an absolute path
+	repeated string mob_id = 3; // SMPTE formatted mob ID strings returned from GetListOfBinItems().
+}
+
+/**
+ * The response of DuplicateBinItems()
+ */
+message  DuplicateBinItemsResponse
+{
+	ResponseHeader header = 1; // Request header
+	DuplicateBinItemsResponseBody body = 2; // Request body
+}
+
+/**
+ * The body of DuplicateBinItemsResponse
+ */
+message DuplicateBinItemsResponseBody
+{
+	repeated string mob_id = 3; // Newly created mobs
+}
+ /**
+ * The request of GetListOfLinkSettings
+ */
+ message GetListOfLinkSettingsRequest
+ {
+ 	RequestHeader header = 1; // request header
+ 	GetListOfLinkSettingsRequestBody body = 2; // request body
+ }
+
+
+/**
+ * The body of GetListOfLinkSettingsRequest
+ */
+ message GetListOfLinkSettingsRequestBody
+ {
+ }
+
+/**
+ * The response of GetListOfLinkSettings
+ */
+ message GetListOfLinkSettingsResponse
+ {
+ 	ResponseHeader header  = 1; // response header
+ 	GetListOfLinkSettingsResponseBody body = 2; // response body
+ }
+
+/**
+ * The body of GetListOfLinkSettingsResponse
+ */
+ message GetListOfLinkSettingsResponseBody
+ {
+ 	repeated string setting_names = 1; // link settings
+ }
+
+  /**
+ * The request of LinkFile
+ */
+ message LinkFileRequest
+ {
+ 	RequestHeader header = 1; // request header
+ 	LinkFileRequestBody body = 2; // request body
+ }
+
+
+/**
+ * The body of LinkFileRequest
+ */
+ message LinkFileRequestBody
+ {
+ 	string file_path = 1; // path to file that is to be link
+	string destination_bin = 2; // path can be relative to project folder or an absolute path
+	string link_settings_name = 3; // Name of an already-existing link-specific setting from the MC. If empty or incorrect, default link setting is used.
+ }
+
+/**
+ * The response of LinkFile
+ */
+ message LinkFileResponse
+ {
+ 	ResponseHeader header  = 1; // response header
+ 	LinkFileResponseBody body = 2; // response body
+ }
+
+/**
+ * The body of LinkFileResponse
+ */
+ message LinkFileResponseBody
+ {
+	string mob_id = 1;
+ }
+
+ /**
+ * The request of GetListOfJobQueues
+ */
+ message GetListOfJobQueuesRequest
+ {
+ 	RequestHeader header = 1; // request header
+ 	GetListOfJobQueuesRequestBody body = 2; // request body
+ }
+
+
+/**
+ * The body of GetListOfJobQueuesRequest
+ */
+ message GetListOfJobQueuesRequestBody
+ {
+ }
+
+/**
+ * The response of GetListOfJobQueues
+ */
+ message GetListOfJobQueuesResponse
+ {
+ 	ResponseHeader header  = 1; // response header
+ 	GetListOfJobQueuesResponseBody body = 2; // response body
+ }
+
+/**
+ * The body of GetListOfJobQueuesResponse
+ */
+ message GetListOfJobQueuesResponseBody
+ {
+ 	repeated JobsQueue job_queues = 1;
+
+	 message JobsQueue
+	 {
+		string name = 1;
+		string id = 2;
+	 }
+ }
+
+  /**
+ * The request of DeleteMarkers
+ */
+ message DeleteMarkersRequest
+ {
+ 	RequestHeader header = 1; // request header
+ 	DeleteMarkersRequestBody body = 2; // request body
+ }
+
+
+/**
+ * The body of DeleteMarkersRequest
+ */
+ message DeleteMarkersRequestBody
+ {
+	string mob_id = 1; // mob id
+	repeated string guid = 2; // marker GUID
+	optional string timecode_range_start = 3;
+	optional string timecode_range_end = 4;
+	optional MarkerColor color = 5;
+	optional TrackLabel track_label = 6;
+ }
+
+/**
+ * The response of DeleteMarkers
+ */
+ message DeleteMarkersResponse
+ {
+ 	ResponseHeader header  = 1; // response header
+ 	DeleteMarkersResponseBody body = 2; // response body
+ }
+
+/**
+ * The body of DeleteMarkersResponse
+ */
+ message DeleteMarkersResponseBody
+ {
+
+ }
+ 
+  /**
+ * The request of GetListOfCommands
+ */
+ message GetListOfCommandsRequest
+ {
+ 	RequestHeader header = 1; // request header
+ 	GetListOfCommandsRequestBody body = 2; // request body
+ }
+
+
+/**
+ * The body of GetListOfCommandsRequest
+ */
+ message GetListOfCommandsRequestBody
+ {
+
+ }
+
+/**
+ * The response of GetListOfCommands
+ */
+ message GetListOfCommandsResponse
+ {
+ 	ResponseHeader header  = 1; // response header
+ 	GetListOfCommandsResponseBody body = 2; // response body
+ }
+
+/**
+ * The body of GetListOfCommandsResponse
+ */
+ message GetListOfCommandsResponseBody
+ {
+	repeated CommandInfo commands = 1;
+
+	message CommandInfo
+	{ 
+		string name = 1;
+		int32 commandId = 2;
+		string category = 3;
+	}
+ }
+
+  /**
+ * The request of DoCommand
+ */
+ message DoCommandRequest
+ {
+ 	RequestHeader header = 1; // request header
+ 	DoCommandRequestBody body = 2; // request body
+ }
+
+
+/**
+ * The body of DoCommandRequest
+ */
+ message DoCommandRequestBody
+ {
+	int32 commandId = 1;
+ }
+
+/**
+ * The response of DoCommand
+ */
+ message DoCommandResponse
+ {
+ 	ResponseHeader header  = 1; // response header
+ 	DoCommandResponseBody body = 2; // response body
+ }
+
+/**
+ * The body of DoCommandResponse
+ */
+ message DoCommandResponseBody
+ {
+
+ }
+
+   /**
+ * The request of IsCommandsEnabled
+ */
+ message IsCommandsEnabledRequest
+ {
+ 	RequestHeader header = 1; // request header
+ 	IsCommandsEnabledRequestBody body = 2; // request body
+ }
+
+
+/**
+ * The body of IsCommandsEnabledRequest
+ */
+ message IsCommandsEnabledRequestBody
+ {
+	repeated int32 commandsId = 1;
+ }
+
+/**
+ * The response of IsCommandsEnabled
+ */
+ message IsCommandsEnabledResponse
+ {
+ 	ResponseHeader header  = 1; // response header
+ 	IsCommandsEnabledResponseBody body = 2; // response body
+ }
+
+/**
+ * The body of IsCommandsEnabledResponse
+ */
+ message IsCommandsEnabledResponseBody
+ {
+	repeated CommandEnableInfo commands = 1;
+
+	message CommandEnableInfo
+	{ 
+		int32 commandId = 1;
+		bool enable = 2;
+	}
+ }
+
+ 
+/**
+ * The request of StartPlay
+ */
+message StartPlayRequest {
+    RequestHeader header = 1; // Request header
+    StartPlayRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of StartPlayRequest
+ */
+message StartPlayRequestBody {
+    string mob_id = 1; // Mob ID to play
+    string timecode = 2; // Timecode position (e.g., "00:00:00:00")
+    int32 offset = 3; // Frame offset (if >= 0, this will be used instead of timecode)
+}
+
+/**
+ * The response of StartPlay
+ */
+message StartPlayResponse {
+    ResponseHeader header = 1; // Response header
+    StartPlayResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of StartPlayResponse
+ */
+message StartPlayResponseBody {
+   
+}
+
+/**
+ * The request of StopPlay
+ */
+message StopPlayRequest {
+    RequestHeader header = 1; // Request header
+    StopPlayRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of StopPlayRequest
+ */
+message StopPlayRequestBody {
+}
+
+/**
+ * The response of StopPlay
+ */
+message StopPlayResponse {
+    ResponseHeader header = 1; // Response header
+    StopPlayResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of StopPlayResponse
+ */
+message StopPlayResponseBody {
+    
+}
+
+/**
+ * The request of SetPosition
+ */
+message SetPositionRequest {
+	RequestHeader header = 1; // Request header
+	SetPositionRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of SetPositionRequest
+ */
+ message SetPositionRequestBody {
+	string mob_id = 1; // Mob ID in viewer
+    string timecode = 2; // Timecode position (e.g., "00:00:00:00")
+    int32 offset = 3; // Frame offset (if >= 0, this will be used instead of timecode)
+ }
+
+/**
+ * The response of SetPosition
+ */
+message SetPositionResponse {
+	ResponseHeader header = 1;  // Request header
+	SetPositionResponseBody body = 2; // Request body
+}
+
+/**
+ * The body of SetPositionResponse
+ */
+message SetPositionResponseBody {
+	
+}
+
+/**
+ * The request of GetListOfWindows()
+ */
+message GetListOfWindowsRequest
+{
+	RequestHeader header = 1; // Request header
+	GetListOfWindowsRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of GetListOfWindowsRequest
+ */
+message GetListOfWindowsRequestBody
+{
+	WindowsFilter windows_filter = 1;
+
+	enum WindowsFilter
+	{
+		ALL = 0;
+		VISIBLE = 1;
+		ACTIVE = 2;
+	}
+	string windows_type = 3;
+}
+
+/**
+ * The response of GetListOfWindows
+ */
+message  GetListOfWindowsResponse
+{
+	ResponseHeader header = 1; // Response header
+	GetListOfWindowsResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of GetListOfWindowsResponse
+ */
+message GetListOfWindowsResponseBody
+{
+	repeated WindowInfo windows = 1; // The list of Avid Windows
+
+	/**
+	 * Represents Avid Window info.
+	 */
+	message WindowInfo
+	{
+		string id = 1; // window id
+		string name = 2; // window name
+		string type = 3; // window type (including Tool window, Bin Container, Bin window, Script window, Panel SDK window)
+		bool visibility = 4; // window visible or hidden
+		bool instanceType = 5; // single instance or multi instance
+		bool active = 6; // window active or inactive
+	}
+}
+
+/**
+* The request of GetListOfSequenceTemplates
+*/
+message GetListOfSequenceTemplatesRequest
+{
+	RequestHeader header = 1; // Request Header
+	GetListOfSequenceTemplatesRequestBody body = 2; // Request Body
+}
+
+/**
+* The body of GetListOfSequenceTemplatesRequest
+*/
+message GetListOfSequenceTemplatesRequestBody
+{
+}
+
+/**
+* The response of GetListOfSequenceTemplates
+*/
+message GetListOfSequenceTemplatesResponse
+{
+	ResponseHeader header = 1; // Response Header
+	GetListOfSequenceTemplatesResponseBody body = 2; //Response body
+}
+
+/**
+* The body of GetListOfSequenceTemplatesResponse
+*/
+message GetListOfSequenceTemplatesResponseBody
+{
+	repeated string setting_names = 1; // sequence template name
+	string active_setting = 2; // currently active sequence template name
+}
+
+/**
+ * The request of MakeActiveWindow()
+ */
+message MakeActiveWindowRequest
+{
+	RequestHeader header = 1; // Request header
+	MakeActiveWindowRequestBody body = 2; // Request body
+}
+
+/**
+ * The body of MakeActiveWindowRequest
+ */
+message MakeActiveWindowRequestBody
+{
+	string window_id = 1;
+}
+
+/**
+ * The response of MakeActiveWindow
+ */
+message  MakeActiveWindowResponse
+{
+	ResponseHeader header = 1; // Response header
+	MakeActiveWindowResponseBody body = 2; // Response body
+}
+
+/**
+ * The body of MakeActiveWindowResponse
+ */
+message MakeActiveWindowResponseBody
+{
+
+}

@@ -1,0 +1,37 @@
+{
+  "category": "suite-plugin",
+  "name": "com.acohenvfx.aebridge",
+  "version": "0.0.1",
+  "displayName": "AEBridge",
+  "description": "One-click round-trip between Avid Media Composer and After Effects for temp titles, graphics, and quick element comps.",
+  "usesApi": [
+    "avid.mediacomposer.general",
+    "avid.mediacomposer.timelineEditing"
+  ],
+  "subscribesToChannels": [],
+  "entitlements": [],
+  "companyPrefix": "acohenvfx",
+  "appShortName": "aebridge",
+  "uiItems": [
+    {
+      "type": "dropdown",
+      "menuName": "Tools",
+      "id": "aebridge-panel",
+      "displayText": "AEBridge",
+      "windowTitle": "AEBridge",
+      "icon": "static/application.svg",
+      "url": "http://localhost:8010/app"
+    }
+  ],
+  "windowSize": {
+    "initial": { "width": "900", "height": "700" },
+    "minimum": { "width": "700", "height": "520" }
+  },
+  "targetHosts": ["MediaComposer"],
+  "allowedDomains": [
+    "localhost:8010",
+    "127.0.0.1:8010"
+  ],
+  "windowStyle": "floating",
+  "singleton": true
+}

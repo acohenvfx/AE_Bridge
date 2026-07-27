@@ -1,0 +1,212 @@
+// Copyright 2021-2023 by Avid Technology, Inc.
+
+
+syntax = "proto3";
+
+import "MCAPI_Types.proto";
+
+package mcapi;
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.MethodOptions {
+  optional string api_scope = 10778;
+}
+
+/**
+ * MCAPI service
+ */
+service MCAPI
+{
+	// Echo the same message sent from the request. For testing purpose
+	rpc Echo (EchoRequest) returns (EchoResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Get a list of number incremented from 0 to a specified count. For testing purpose
+	rpc GetValues (GetValuesRequest) returns (stream GetValuesResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Get application Info
+	rpc GetAppInfo (GetAppInfoRequest) returns (GetAppInfoResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Get workstation name
+	rpc GetHostInfo (GetHostInfoRequest) returns (GetHostInfoResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Get list of bins in currently opened project, including other bins and Nexis bins.
+	rpc GetBins (GetBinsRequest) returns (stream GetBinsResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Get information of the specified bin
+	rpc GetBinInfo(GetBinInfoRequest) returns (GetBinInfoResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Get information about all bin columns of the specified bin
+	rpc GetBinColumnInfo(GetBinColumnInfoRequest) returns (GetBinColumnInfoResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Get information of the specified mob
+	rpc GetMobInfo(GetMobInfoRequest) returns (stream GetMobInfoResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Set Bin column information for the specified mob in a opened bin. The mob must be visible based on the Set Bin Display dialog. 
+	rpc SetMobInfo(SetMobInfoRequest) returns (SetMobInfoResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Get the track information for a specified mob. 
+	rpc GetMobTrackInfo(GetMobTrackInfoRequest) returns (GetMobTrackInfoResponse) { option (api_scope) = "avid.mediacomposer.timelineEditing"; }
+ 
+	// Create a new bin in currently opened project path.
+	rpc CreateBin(CreateBinRequest) returns (CreateBinResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+ 
+	// Open a bin from the currently opened project, including other bins and Nexis bins.
+	rpc OpenBin(OpenBinRequest) returns (OpenBinResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Configure SRT stream. Modifies file "OpenIO_SRT_settings.xml" with new settings.
+	rpc ConfigureSRTStream(ConfigureSRTStreamRequest) returns (ConfigureSRTStreamResponse) { option (api_scope) = "avid.mediacomposer.SRT"; }
+
+	// Configure SRT stream. Modifies file "OpenIO_SRT_settings.xml" with new settings.
+	rpc GetSRTStreamSettings(GetSRTStreamSettingsRequest) returns (GetSRTStreamSettingsResponse) { option (api_scope) = "avid.mediacomposer.SRT"; }
+
+	// Set transmision status for the session.
+	rpc SetOTSSessionStatus(SetOTSSessionStatusRequest) returns (SetOTSSessionStatusResponse) { option (api_scope) = "avid.mediacomposer.SRT"; }
+
+	// Get transmision status for the session.
+	rpc GetOTSSessionStatus(GetOTSSessionStatusRequest) returns (GetOTSSessionStatusResponse) { option (api_scope) = "avid.mediacomposer.SRT"; }
+	
+	// Returned a list of volumes that have Avid media files folder
+	rpc GetMediaVolumeList(GetMediaVolumeListRequest) returns (GetMediaVolumeListResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Walk Avid Media files directories on a specified media volume
+	rpc GetMediaVolumeItems(GetMediaVolumeItemsRequest) returns (GetMediaVolumeItemsResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Get list of items in an already opened bin. Items can be filtered by several parameters, including hidden, selected, master clips, sequences, and more.
+	rpc GetListOfBinItems(GetListOfBinItemsRequest) returns (stream GetListOfBinItemsResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Get information such as frame rate, color space, etc. for the currently opened project
+	rpc GetOpenProjectInfo(GetOpenProjectInfoRequest) returns (GetOpenProjectInfoResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+	
+	// Retrieve vendor provided information from the project
+	rpc GetCustomProjectData(GetCustomProjectDataRequest) returns (GetCustomProjectDataResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Store vendor provided information in the project based on a key. Vendor  must respect GDR privacy requirements.
+	// Data must be encrypted if it includes user identifiable data and allow data to be deleted
+	rpc SetCustomProjectData(SetCustomProjectDataRequest) returns (SetCustomProjectDataResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Scan the specified Avid Media Files Folder and update/create PMR and MDB files.
+	rpc ScanAvidMediaFilesFolder(ScanAvidMediaFilesFolderRequest) returns (ScanAvidMediaFilesFolderResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Create clips in the specified bin based on MDB file in the given Avid Media Files folder. 
+	// If the destination bin isn't opened, the call will fail.
+	rpc CreateClipsFromAvidMediaFilesFolder(CreateClipsFromAvidMediaFilesFolderRequest) returns(CreateClipsFromAvidMediaFilesFolderResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Create a custom column in a specified opened bin. If column already exists, an error will be returned.
+	// Use SetMobInfo to set value for the column. 
+	rpc CreateCustomColumn(CreateCustomColumnRequest) returns (CreateCustomColumnResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Returns a list of available import settings
+	rpc GetListOfImportSettings(GetListOfImportSettingsRequest) returns (GetListOfImportSettingsResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Import a file from a file path using an import-specific setting from Media Composer. Clip is added to to the specified destination bin.
+	// Returns the mobID of the resulting clip.
+	rpc ImportFile(ImportFileRequest) returns (ImportFileResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Returns a list of available List Tool EDL settings
+	rpc GetListOfExportEDLSettings(GetListOfExportEDLSettingsRequest) returns (GetListOfExportEDLSettingsResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Create an EDL file based on a specified sequence using an EDL-specific setting from the Media Composer List Tool.
+	// Return the full path to the EDL.
+	rpc ExportEDL (ExportEDLRequest) returns (ExportEDLResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Returns a list of available export settings
+	rpc GetListOfExportSettings(GetListOfExportSettingsRequest) returns (GetListOfExportSettingsResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Export file based on a specified mob using an export-specific setting from the Media Composer.
+	// Return the full path to the new file.
+	rpc ExportFile (ExportFileRequest) returns (ExportFileResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Load xml setting data and create a visible read-only non-persistent Media Composer setting. It's useful for export, import, List Tool settings. 
+	// The name of any setting should include a vendor prefix. Please see the documentation for the details. If any setting name already exists in Media Composer with the same unique ID, 
+	// it will be replaced. If any setting with the same name and different ID or no ID exists, the API will fail and no settings are added.
+	rpc LoadSetting(LoadSettingRequest) returns (LoadSettingResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Load one or more clips or sequences into Source, Record, or Popup monitor. 
+	rpc LoadMobsIntoViewer(LoadMobsIntoViewerRequest) returns (LoadMobsIntoViewerResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Select one or more visible mobs in an open bin.
+	rpc SelectMobsInBin(SelectMobsInBinRequest) returns (SelectMobsInBinResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Get info for which clip/sequence is loaded in the viewer
+	rpc GetViewerMobs(GetViewerMobsRequest) returns (GetViewerMobsResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Get bin apsolute path from mobID
+	rpc GetBinFromMob(GetBinFromMobRequest) returns (GetBinFromMobResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+	
+	// Add new or update existing Marker information on a given track and position in the specified clip or sequence mob in an opened bin.
+	// Use ChangeMarker to change an existing marker's track or information on a given marker's guid.
+	rpc AddMarker(AddMarkerRequest) returns (AddMarkerResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Add or update multiple Markers on a given track and position in the specified clip or sequence mob in an opened bin.
+	rpc AddMarkers(AddMarkersRequest) returns (AddMarkersResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Get all information about specified markers in clip or sequence mob
+	rpc GetMarkers(GetMarkersRequest) returns (GetMarkersResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Change Marker information for the specified marker of the specified mob by guid. Use this API to move a marker to another track.
+	rpc ChangeMarker(ChangeMarkerRequest) returns (ChangeMarkerResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Delete markers for a given mob_id by either an array of guids or by a combination of timecode range, MarkerColor and TrackLabel.
+	// To be clear, if a guid is provided, then it will always be deleted.
+	// WARNING: Be very careful with this API. It is very easy to permanently remove too many markers. For example, if only the mob_id
+	// is provided, then every marker for that mob in the open bin will be deleted.
+	rpc DeleteMarkers(DeleteMarkersRequest) returns (DeleteMarkersResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Create subclip in bin base on clip or sequence works similar to Batch Subclip Tool
+	rpc CreateSubClip(CreateSubClipRequest) returns (CreateSubClipResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+	
+	// Close already opened bin
+	rpc CloseBin(CloseBinRequest) returns (CloseBinResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Move list of mobs from one to another bin
+	rpc MoveBinItems(MoveBinItemsRequest) returns (MoveBinItemsResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Copy list of mobs from one to another bin
+	rpc CopyBinItems(CopyBinItemsRequest) returns (CopyBinItemsResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Duplicate list of mobs in bin
+	rpc DuplicateBinItems(DuplicateBinItemsRequest) returns (DuplicateBinItemsResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+	
+	// Returns a list of available link settings
+	rpc GetListOfLinkSettings(GetListOfLinkSettingsRequest) returns (GetListOfLinkSettingsResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Link a file from a file path using an link-specific setting from Media Composer. Clip is added to to the specified destination bin.
+	// Returns the mobID of the resulting clip.
+	rpc LinkFile(LinkFileRequest) returns (LinkFileResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Return the job queues currently available to be used by Distributed Processing (DP).
+	rpc GetListOfJobQueues(GetListOfJobQueuesRequest) returns (GetListOfJobQueuesResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Return the list if commands by name, commandId and category. Please note that the ids are only guaranteed to be valid for a given launch of Avid Media Composer.
+	// Also, commands are based on the current context of the application, i.e. current active window, selection etc.
+	rpc GetListOfCommands(GetListOfCommandsRequest) returns (GetListOfCommandsResponse) { option (api_scope) = "avid.mediacomposer.command"; }
+
+	// Will start the command identified by the commandId returned from a recent call to GetListOfCommands. When the command completes, the result will be returned as a notification.
+	rpc DoCommand(DoCommandRequest) returns (DoCommandResponse) { option (api_scope) = "avid.mediacomposer.command"; }
+
+	// Will return list of commands 'enable' state based on the command ids returned from a recent call to GetListOfCommands.
+	// The commands 'enable' state is also based on the current context of the application, i.e. current active window, selection etc.
+	rpc IsCommandsEnabled(IsCommandsEnabledRequest) returns (IsCommandsEnabledResponse) { option (api_scope) = "avid.mediacomposer.command"; }
+
+	// Start play for the given mobid, frame offset or timecode. The mobid, if provided, must be loaded in the active monitor.
+	// If the mobid is not provided, then the active monitor will start playing at the given offset if >= 0, or the given timecode.
+	rpc StartPlay(StartPlayRequest) returns (StartPlayResponse) { option (api_scope) = "avid.mediacomposer.transportcontrols"; }
+
+	// Signal the actively playing clip or sequence to stop.
+	rpc StopPlay(StopPlayRequest) returns (StopPlayResponse) { option (api_scope) = "avid.mediacomposer.transportcontrols"; }
+
+	// Sets Position for the given mobID, frame offset or timecode. The mobID, if provided, must be loaded in the active monitor.
+	// If the mobID is not provided, then the active monitor will have position changed at the given offset (>= 0) or given timecode.
+	rpc SetPosition(SetPositionRequest) returns (SetPositionResponse) { option (api_scope) = "avid.mediacomposer.transportcontrols"; }
+
+	// Will return the current list of all windows, with criteria by type and visibility.
+	rpc GetListOfWindows(GetListOfWindowsRequest) returns (GetListOfWindowsResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Returns the currently available list of Sequence Templates names, with additional information about with is currently set as default.
+	rpc GetListOfSequenceTemplates(GetListOfSequenceTemplatesRequest) returns (GetListOfSequenceTemplatesResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+	// Make active window using unique id returned from previous call to GetListOfWindows.
+	rpc MakeActiveWindow(MakeActiveWindowRequest) returns (MakeActiveWindowResponse) { option (api_scope) = "avid.mediacomposer.general"; }
+
+}

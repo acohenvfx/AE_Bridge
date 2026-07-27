@@ -1,0 +1,296 @@
+<template>
+  <div class="eb-tool">
+    <div class="eb-tool-head">
+      <div class="eb-tool-head-l">
+        <div class="eb-tool-eyebrow">
+          <span class="dot" aria-hidden="true"></span>
+          BRIDGE · AVID ↔ AFTER EFFECTS
+        </div>
+        <h2 class="eb-tool-title">Round-trip a shot to After Effects</h2>
+        <p class="eb-tool-sub">
+          Send the selected shot out with the plate pre-loaded; get the render back and cut it in.
+        </p>
+      </div>
+      <div class="eb-tool-head-r">
+        <div class="eb-env-pill" :class="{ 'is-bad': !s.helper.online }">
+          <span class="eb-env-dot" :class="{ 'is-bad': !s.helper.online }"></span>
+          {{ s.helper.online ? 'helper v' + s.helper.version : 'helper offline' }}
+        </div>
+        <button
+          class="eb-env-pill"
+          :class="{ 'is-bad': !s.ae.found }"
+          :title="s.ae.found ? '' : 'Click for diagnostics'"
+          @click="s.ae.found ? null : showAeDiag()"
+        >
+          <span class="eb-env-dot" :class="{ 'is-bad': !s.ae.found }"></span>
+          {{ s.ae.found ? 'AE ' + s.ae.version : 'AE not found — why?' }}
+        </button>
+      </div>
+    </div>
+
+    <div class="eb-tool-body">
+      <div class="eb-section">
+        <div class="eb-section-head">
+          <h3 class="eb-section-title">Current shot</h3>
+          <button class="eb-btn eb-btn--ghost eb-btn--mini" :disabled="reading" @click="readShot">
+            {{ reading ? 'Reading…' : 'Refresh' }}
+          </button>
+        </div>
+        <div v-if="!s.inAvid" class="eb-muted">
+          Not running inside Media Composer — MCAPI unavailable. Send will use a placeholder shot.
+        </div>
+        <div v-else-if="s.shot" class="eb-stats">
+          <span class="eb-stat"><b>{{ s.shot.name }}</b></span>
+          <span class="eb-stat">TC <b>{{ s.shot.playheadTC || '—' }}</b></span>
+          <span class="eb-stat"><b>{{ s.shot.resolution.w }}×{{ s.shot.resolution.h }}</b></span>
+          <span class="eb-stat"><b>{{ s.shot.frameRate }}</b> fps</span>
+        </div>
+        <div v-else class="eb-muted">{{ s.shotMessage || 'Click Refresh to read the record monitor.' }}</div>
+        <div class="eb-muted" style="font-size:11.5px">
+          Mark IN/OUT around the shot on the timeline; Send grabs that range via a subclip.
+        </div>
+      </div>
+
+      <div class="eb-section">
+        <div class="eb-grid cols-2">
+          <div class="eb-field">
+            <label class="eb-label">Template</label>
+            <select v-model="s.templateId" class="eb-select">
+              <option v-for="t in s.templates" :key="t.id" :value="t.id">{{ t.label }}</option>
+            </select>
+          </div>
+          <div class="eb-field">
+            <label class="eb-label">Handles</label>
+            <input v-model.number="s.handles" type="number" min="0" max="120" class="eb-input" />
+          </div>
+        </div>
+
+        <div v-if="s.inAvid" class="eb-field">
+          <label class="eb-label">Export setting (QuickTime)</label>
+          <select v-model="s.exportSetting" class="eb-select">
+            <option value="">(default / current)</option>
+            <option v-for="name in s.exportSettings" :key="name" :value="name">{{ name }}</option>
+          </select>
+        </div>
+
+        <div class="eb-field">
+          <label class="eb-label">Project mode</label>
+          <div class="eb-tabs">
+            <button
+              class="eb-tab"
+              :class="{ active: s.projectMode === 'new_per_shot' }"
+              @click="s.projectMode = 'new_per_shot'"
+            >New project per shot</button>
+            <button
+              class="eb-tab"
+              :class="{ active: s.projectMode === 'existing_project' }"
+              @click="s.projectMode = 'existing_project'"
+            >Add to a project…</button>
+          </div>
+        </div>
+
+        <div v-if="s.projectMode === 'existing_project'" class="eb-actions">
+          <button class="eb-btn eb-btn--ghost eb-btn--mini" :disabled="picking" @click="choose">
+            {{ picking ? 'Choosing…' : 'Choose .aep…' }}
+          </button>
+          <span class="eb-mono eb-muted">{{ s.projectLabel || 'no project chosen' }}</span>
+        </div>
+      </div>
+
+      <div class="eb-actions">
+        <button class="eb-btn eb-btn--primary eb-btn--wide" :disabled="s.sending" @click="doSend">
+          {{ s.sending ? 'Sending…' : 'Send to After Effects' }}
+        </button>
+        <span class="eb-muted">{{ s.message }}</span>
+      </div>
+
+      <div class="eb-section">
+        <div class="eb-section-head">
+          <h3 class="eb-section-title">Jobs</h3>
+        </div>
+        <div v-if="!s.jobs.length" class="eb-muted">No jobs yet.</div>
+        <div v-else class="jobs">
+          <div v-for="j in s.jobs" :key="j.job_id" class="job">
+            <div>
+              <div class="eb-mono job-name">{{ j.job_id }}</div>
+              <div class="job-state">{{ stateLabel(j.state) }}</div>
+            </div>
+            <button
+              v-if="j.state === 'validated' || j.state === 'offered'"
+              class="eb-btn eb-btn--ghost eb-btn--mini"
+              @click="doSwap(j.job_id)"
+            >Swap in</button>
+            <span v-else class="eb-stat">
+              <b>{{ j.project_mode === 'existing_project' ? 'shared' : 'per-shot' }}</b>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+import { aebridge as state } from '~/store/toolState'
+import * as api from '~/utils/api/aebridge'
+import * as tl from '~/utils/api/timeline'
+
+export default {
+  name: 'AEBridgePanel',
+  data() {
+    return { s: state, picking: false, reading: false, _timer: null }
+  },
+  async mounted() {
+    this.s.inAvid = tl.mcapiAvailable()
+    await this.refreshVersion()
+    await this.refreshTemplates()
+    await this.refreshJobs()
+    if (this.s.inAvid) {
+      this.loadExportSettings()
+      this.readShot()
+    }
+    this._timer = setInterval(this.refreshJobs, 4000)
+  },
+  beforeDestroy() {
+    if (this._timer) clearInterval(this._timer)
+  },
+  methods: {
+    stateLabel(x) {
+      return (x || '').replace(/_/g, ' ')
+    },
+    async refreshVersion() {
+      try {
+        const v = await api.getVersion()
+        this.s.helper = { online: true, version: v.helper_version }
+        this.s.ae = { found: !!v.ae_version, version: v.ae_version }
+      } catch (e) {
+        this.s.helper = { online: false, version: null }
+      }
+    },
+    async refreshTemplates() {
+      try {
+        this.s.templates = await api.listTemplates()
+        if (!this.s.templates.find((t) => t.id === this.s.templateId)) {
+          this.s.templateId = this.s.templates.length ? this.s.templates[0].id : '__blank__'
+        }
+      } catch (e) {
+        this.s.templates = [{ id: '__blank__', label: 'Blank comp (no template)' }]
+      }
+    },
+    async refreshJobs() {
+      try {
+        const jobs = await api.listJobs()
+        this.s.jobs = jobs.slice().reverse()
+      } catch (e) {
+        /* leave prior list */
+      }
+    },
+    async loadExportSettings() {
+      try {
+        this.s.exportSettings = await tl.getExportSettings()
+      } catch (e) {
+        this.s.exportSettings = []
+      }
+    },
+    async readShot() {
+      if (!this.s.inAvid) return
+      this.reading = true
+      this.s.shotMessage = ''
+      try {
+        this.s.shot = await tl.getCurrentShot()
+      } catch (e) {
+        this.s.shot = null
+        this.s.shotMessage = 'Could not read shot: ' + e.message
+      } finally {
+        this.reading = false
+      }
+    },
+    async choose() {
+      this.picking = true
+      try {
+        const r = await api.pickProject()
+        this.s.projectToken = r.target_project_token
+        this.s.projectLabel = r.label
+      } catch (e) {
+        this.s.projectLabel = 'picker unavailable (' + e.message + ')'
+      } finally {
+        this.picking = false
+      }
+    },
+    async doSend() {
+      this.s.sending = true
+      try {
+        const payload = {
+          template_id: this.s.templateId,
+          handles: Number(this.s.handles) || 0,
+          project_mode: this.s.projectMode,
+          target_project_token:
+            this.s.projectMode === 'existing_project' ? this.s.projectToken : null
+        }
+
+        if (this.s.inAvid) {
+          // 1. reserve a job + export dir from the helper
+          this.s.message = 'Preparing…'
+          const prep = await api.prepare()
+          // 2. grab the marked shot and export the reference via MCAPI
+          this.s.message = 'Exporting shot from Avid…'
+          const grabbed = await tl.grabMarkedShot({
+            exportDir: prep.export_dir,
+            destBinPath: this.s.destBin,
+            exportSettingsName: this.s.exportSetting,
+            fileName: prep.reference_name
+          })
+          // 3. hand the real shot + reference to the helper
+          payload.job_id = prep.job_id
+          payload.shot = grabbed.shot
+          payload.reference_path = grabbed.referencePath
+        } else {
+          this.s.message = 'Sending (placeholder shot)…'
+        }
+
+        const job = await api.send(payload)
+        this.s.message = 'Sent — ' + job.job_id + ' (' + this.stateLabel(job.state) + ')'
+        await this.refreshJobs()
+      } catch (e) {
+        this.s.message = 'Error: ' + e.message
+      } finally {
+        this.s.sending = false
+      }
+    },
+    async doSwap(jobId) {
+      try {
+        await api.swap(jobId)
+        await this.refreshJobs()
+      } catch (e) {
+        this.s.message = 'Swap error: ' + e.message
+      }
+    },
+    async showAeDiag() {
+      try {
+        const d = await api.getAeStatus()
+        const paths = d.searched && d.searched.length ? d.searched.join('\n') : '(none found)'
+        window.alert(
+          'After Effects not found.\n\nPlatform: ' +
+            d.platform +
+            '\n\nSearched:\n' +
+            paths +
+            "\n\nInstall After Effects, or tell me where it lives and I'll add that path."
+        )
+      } catch (e) {
+        window.alert('Could not read AE diagnostics: ' + e.message)
+      }
+    }
+  }
+}
+</script>
+
+<style scoped>
+.jobs { display: flex; flex-direction: column; gap: 8px; }
+.job {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--input-bg); border: 1px solid var(--line);
+  border-radius: var(--r-ctrl); padding: 10px 12px;
+}
+.job-name { font-size: 12px; color: var(--ink-2); }
+.job-state { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+</style>

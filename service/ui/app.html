@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>AEBridge</title>
+<style>
+  :root{
+    --panel-1:#101a28; --panel-0:#0b1220; --input-bg:#0d1825;
+    --line:rgba(120,148,180,.16); --ink:#eef5fb; --ink-2:#d5e0ec;
+    --muted:#8aa4bf; --muted-2:#6f89a7; --ok:#34d399; --warn:#fbbf24; --bad:#fb7185;
+    --accent:#7c5cff; --accent-2:#22d3ee; --r-card:18px; --r-ctrl:12px;
+    --font-ui:'Manrope',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 700px at 20% -10%,#16243a,transparent),var(--panel-0);
+    color:var(--ink);font-family:var(--font-ui);font-size:14px;padding:22px}
+  h1{font-size:20px;margin:0 0 2px;letter-spacing:.2px}
+  .sub{color:var(--muted);margin:0 0 18px;font-size:13px}
+  .eyebrow{display:flex;align-items:center;gap:8px;color:var(--muted-2);
+    font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.14em;margin-bottom:10px}
+  .dot{width:8px;height:8px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent-2))}
+  .card{background:var(--panel-1);border:1px solid var(--line);border-radius:var(--r-card);
+    padding:16px 18px;margin-bottom:14px}
+  label{display:block;color:var(--muted);font-size:12px;margin:0 0 6px}
+  select,input{width:100%;background:var(--input-bg);border:1px solid var(--line);color:var(--ink);
+    padding:9px 11px;border-radius:var(--r-ctrl);font-family:inherit;font-size:13px;outline:none}
+  select:focus,input:focus{border-color:var(--accent)}
+  .row{display:flex;gap:12px}.row>*{flex:1}
+  .seg{display:inline-flex;background:var(--input-bg);border:1px solid var(--line);border-radius:var(--r-ctrl);padding:3px}
+  .seg button{background:transparent;border:0;color:var(--muted);padding:7px 12px;border-radius:9px;
+    cursor:pointer;font-family:inherit;font-size:13px}
+  .seg button.on{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#0b1220;font-weight:600}
+  .btn{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#0b1220;border:0;
+    padding:11px 16px;border-radius:var(--r-ctrl);cursor:pointer;font-family:inherit;font-weight:700;font-size:14px}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink-2);font-weight:600}
+  .pill{font-family:var(--font-mono);font-size:11px;padding:3px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+  .pill.ok{color:var(--ok);border-color:rgba(52,211,153,.4)}
+  .pill.bad{color:var(--bad);border-color:rgba(251,113,133,.4)}
+  .jobs{display:flex;flex-direction:column;gap:8px}
+  .job{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    background:var(--input-bg);border:1px solid var(--line);border-radius:var(--r-ctrl);padding:10px 12px}
+  .job .name{font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+  .state{font-family:var(--font-mono);font-size:11px;color:var(--accent-2)}
+  .muted{color:var(--muted)}.mono{font-family:var(--font-mono)}
+  .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+  .actions{display:flex;gap:10px;align-items:center;margin-top:4px}
+  .hint{font-size:12px;color:var(--muted-2);margin-top:8px}
+</style>
+</head>
+<body>
+  <div class="head">
+    <div>
+      <div class="eyebrow"><span class="dot"></span> AEBridge · Avid ↔ After Effects</div>
+      <h1>Round-trip a shot to After Effects</h1>
+      <p class="sub">Send the selected shot out with the plate pre-loaded; get the render back and cut it in.</p>
+    </div>
+    <div style="text-align:right">
+      <div id="helperPill" class="pill">helper…</div>
+      <div id="aePill" class="pill" style="margin-top:6px">AE…</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Template</label>
+        <select id="template"></select>
+      </div>
+      <div style="max-width:120px">
+        <label>Handles</label>
+        <input id="handles" type="number" value="8" min="0" max="120"/>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:12px;align-items:flex-end">
+      <div>
+        <label>Project mode</label>
+        <div class="seg" id="modeSeg">
+          <button data-mode="new_per_shot" class="on">New project per shot</button>
+          <button data-mode="existing_project">Add to a project…</button>
+        </div>
+      </div>
+    </div>
+    <div id="pickRow" class="actions" style="display:none">
+      <button class="btn ghost" id="pickBtn">Choose .aep…</button>
+      <span id="pickLabel" class="muted mono">no project chosen</span>
+    </div>
+
+    <div class="actions" style="margin-top:16px">
+      <button class="btn" id="sendBtn">Send to After Effects</button>
+      <span id="sendMsg" class="hint"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="eyebrow"><span class="dot"></span> Jobs</div>
+    <div class="jobs" id="jobs"><span class="muted">No jobs yet.</span></div>
+  </div>
+
+<script>
+const $ = s => document.querySelector(s);
+let mode = 'new_per_shot';
+let projectToken = null;
+
+async function api(path, opts){
+  const r = await fetch(path, Object.assign({headers:{'Content-Type':'application/json'}}, opts||{}));
+  const body = r.headers.get('content-type')?.includes('json') ? await r.json() : await r.text();
+  if(!r.ok) throw new Error((body && body.detail) || r.statusText);
+  return body;
+}
+
+async function loadVersion(){
+  try{
+    const v = await api('/v1/version');
+    $('#helperPill').textContent = 'helper v'+v.helper_version;
+    $('#helperPill').className = 'pill ok';
+    const ae = v.ae_version;
+    const pill = $('#aePill');
+    pill.textContent = ae ? ('AE '+ae) : 'AE not found — why?';
+    pill.className = 'pill ' + (ae ? 'ok' : 'bad');
+    pill.style.cursor = ae ? 'default' : 'pointer';
+    pill.onclick = ae ? null : showAeDiag;
+  }catch(e){
+    $('#helperPill').textContent = 'helper offline';
+    $('#helperPill').className = 'pill bad';
+  }
+}
+
+async function showAeDiag(){
+  try{
+    const d = await api('/v1/aebridge/ae');
+    const paths = (d.searched && d.searched.length) ? d.searched.join('\n') : '(nothing under /Applications/Adobe After Effects *)';
+    alert('After Effects not found.\n\nPlatform: '+d.platform+'\n\nSearched:\n'+paths+
+          '\n\nInstall After Effects, or if it lives in a non-standard location, tell me and I\'ll add that path.');
+  }catch(e){ alert('Could not read AE diagnostics: '+e.message); }
+}
+
+async function loadTemplates(){
+  const sel = $('#template');
+  try{
+    const list = await api('/v1/aebridge/templates');
+    sel.innerHTML = '';
+    if(!list.length){ sel.innerHTML = '<option value="">(no templates installed)</option>'; return; }
+    for(const t of list){
+      const o = document.createElement('option');
+      o.value = t.id; o.textContent = t.label; sel.appendChild(o);
+    }
+  }catch(e){ sel.innerHTML = '<option value="">(error loading)</option>'; }
+}
+
+function stateLabel(s){ return s.replace(/_/g,' '); }
+
+async function refreshJobs(){
+  const el = $('#jobs');
+  try{
+    const jobs = await api('/v1/aebridge/jobs');
+    if(!jobs.length){ el.innerHTML = '<span class="muted">No jobs yet.</span>'; return; }
+    el.innerHTML = '';
+    for(const j of jobs.reverse()){
+      const div = document.createElement('div'); div.className = 'job';
+      const left = document.createElement('div');
+      left.innerHTML = '<div class="name">'+j.job_id+'</div><div class="state">'+stateLabel(j.state)+'</div>';
+      const right = document.createElement('div');
+      if(j.state === 'validated' || j.state === 'offered'){
+        const b = document.createElement('button'); b.className='btn ghost'; b.textContent='Swap in';
+        b.onclick = async()=>{ await api('/v1/aebridge/return/'+j.job_id+'/swap',{method:'POST'}); refreshJobs(); };
+        right.appendChild(b);
+      } else {
+        right.innerHTML = '<span class="pill">'+(j.project_mode==='existing_project'?'shared':'per-shot')+'</span>';
+      }
+      div.appendChild(left); div.appendChild(right); el.appendChild(div);
+    }
+  }catch(e){ el.innerHTML = '<span class="muted">Could not load jobs.</span>'; }
+}
+
+$('#modeSeg').addEventListener('click', e=>{
+  const b = e.target.closest('button'); if(!b) return;
+  mode = b.dataset.mode;
+  [...$('#modeSeg').children].forEach(x=>x.classList.toggle('on', x===b));
+  $('#pickRow').style.display = mode==='existing_project' ? 'flex' : 'none';
+});
+
+$('#pickBtn').onclick = async()=>{
+  try{
+    const r = await api('/v1/aebridge/pick-project',{method:'POST'});
+    projectToken = r.target_project_token;
+    $('#pickLabel').textContent = r.label;
+  }catch(e){ $('#pickLabel').textContent = 'picker unavailable (' + e.message + ')'; }
+};
+
+$('#sendBtn').onclick = async()=>{
+  const btn = $('#sendBtn'); btn.disabled = true; $('#sendMsg').textContent = 'Exporting…';
+  try{
+    const payload = {
+      template_id: $('#template').value,
+      handles: Number($('#handles').value)||0,
+      project_mode: mode,
+      target_project_token: mode==='existing_project' ? projectToken : null
+    };
+    const job = await api('/v1/aebridge/send',{method:'POST',body:JSON.stringify(payload)});
+    $('#sendMsg').textContent = 'Sent — ' + job.job_id + ' (' + stateLabel(job.state) + ')';
+    refreshJobs();
+  }catch(e){ $('#sendMsg').textContent = 'Error: ' + e.message; }
+  finally{ btn.disabled = false; }
+};
+
+loadVersion(); loadTemplates(); refreshJobs();
+setInterval(refreshJobs, 4000);
+</script>
+</body>
+</html>
