@@ -47,3 +47,18 @@ def validate_aep_selection(path: str | Path) -> Path:
     if not p.is_file():
         raise PathNotAllowed(f"file not found: {p}")
     return p
+
+
+def validate_aep_save_target(path: str | Path) -> Path:
+    """Validate a NEW `.aep` save target chosen via the save dialog.
+
+    The file need not exist yet, but it must end in `.aep` (added if missing) and
+    its parent directory must exist and be writable.
+    """
+    p = normalize(path)
+    if p.suffix.lower() != ".aep":
+        p = p.with_suffix(".aep")
+    parent = p.parent
+    if not parent.is_dir():
+        raise PathNotAllowed(f"folder does not exist: {parent}")
+    return p

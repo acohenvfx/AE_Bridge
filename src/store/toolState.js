@@ -4,6 +4,8 @@ import Vue from 'vue'
 export const aebridge = Vue.observable({
   templateId: '__blank__',
   handles: 8,
+  prefix: '',
+  suffix: '',
   projectMode: 'new_per_shot', // or 'existing_project'
   projectToken: null,
   projectLabel: '',

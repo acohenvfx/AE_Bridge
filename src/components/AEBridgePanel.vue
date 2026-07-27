@@ -65,6 +65,20 @@
           </div>
         </div>
 
+        <div class="eb-grid cols-2">
+          <div class="eb-field">
+            <label class="eb-label">Name prefix</label>
+            <input v-model="s.prefix" class="eb-input" placeholder="(optional)" />
+          </div>
+          <div class="eb-field">
+            <label class="eb-label">Name suffix</label>
+            <input v-model="s.suffix" class="eb-input" placeholder="(optional)" />
+          </div>
+        </div>
+        <div v-if="s.prefix || s.suffix" class="eb-muted" style="font-size:11.5px">
+          Plate name → <span class="eb-mono">{{ s.prefix }}&lt;shot&gt;{{ s.suffix }}</span>
+        </div>
+
         <div v-if="s.inAvid" class="eb-field">
           <label class="eb-label">Export setting (QuickTime)</label>
           <select v-model="s.exportSetting" class="eb-select">
@@ -79,21 +93,21 @@
             <button
               class="eb-tab"
               :class="{ active: s.projectMode === 'new_per_shot' }"
-              @click="s.projectMode = 'new_per_shot'"
+              @click="setMode('new_per_shot')"
             >New project per shot</button>
             <button
               class="eb-tab"
               :class="{ active: s.projectMode === 'existing_project' }"
-              @click="s.projectMode = 'existing_project'"
+              @click="setMode('existing_project')"
             >Add to a project…</button>
           </div>
         </div>
 
-        <div v-if="s.projectMode === 'existing_project'" class="eb-actions">
+        <div class="eb-actions">
           <button class="eb-btn eb-btn--ghost eb-btn--mini" :disabled="picking" @click="choose">
-            {{ picking ? 'Choosing…' : 'Choose .aep…' }}
+            {{ picking ? 'Choosing…' : (s.projectMode === 'new_per_shot' ? 'Name / place new project…' : 'Choose .aep…') }}
           </button>
-          <span class="eb-mono eb-muted">{{ s.projectLabel || 'no project chosen' }}</span>
+          <span class="eb-mono eb-muted">{{ s.projectLabel || (s.projectMode === 'new_per_shot' ? 'auto (default location)' : 'no project chosen') }}</span>
         </div>
       </div>
 
@@ -107,6 +121,11 @@
       <div class="eb-section">
         <div class="eb-section-head">
           <h3 class="eb-section-title">Jobs</h3>
+          <button
+            v-if="s.jobs.length"
+            class="eb-btn eb-btn--ghost eb-btn--mini"
+            @click="doClearJobs"
+          >Clear finished</button>
         </div>
         <div v-if="!s.jobs.length" class="eb-muted">No jobs yet.</div>
         <div v-else class="jobs">
@@ -141,9 +160,10 @@ import * as tl from '~/utils/api/timeline'
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, picking: false, reading: false, importingId: null, returnBin: 'AEBridge_Returns', _timer: null }
+    return { s: state, picking: false, reading: false, importingId: null, _timer: null, _shotTimer: null }
   },
   async mounted() {
+    this.restorePrefs()
     this.s.inAvid = tl.mcapiAvailable()
     await this.refreshVersion()
     await this.refreshTemplates()
@@ -151,13 +171,34 @@ export default {
     if (this.s.inAvid) {
       this.loadExportSettings()
       this.readShot()
+      // Auto-refresh the current shot readout (MCAPI has no push events).
+      this._shotTimer = setInterval(() => this.readShot(true), 1500)
     }
     this._timer = setInterval(this.refreshJobs, 4000)
   },
   beforeDestroy() {
     if (this._timer) clearInterval(this._timer)
+    if (this._shotTimer) clearInterval(this._shotTimer)
+  },
+  watch: {
+    's.exportSetting'(v) { this.savePref('exportSetting', v) },
+    's.prefix'(v) { this.savePref('prefix', v) },
+    's.suffix'(v) { this.savePref('suffix', v) },
+    's.projectMode'(v) { this.savePref('projectMode', v) }
   },
   methods: {
+    savePref(k, v) {
+      try { window.localStorage.setItem('aebridge.' + k, v == null ? '' : String(v)) } catch (e) {}
+    },
+    restorePrefs() {
+      try {
+        const g = (k) => window.localStorage.getItem('aebridge.' + k)
+        if (g('exportSetting') != null) this.s.exportSetting = g('exportSetting')
+        if (g('prefix') != null) this.s.prefix = g('prefix')
+        if (g('suffix') != null) this.s.suffix = g('suffix')
+        if (g('projectMode')) this.s.projectMode = g('projectMode')
+      } catch (e) {}
+    },
     stateLabel(x) {
       return (x || '').replace(/_/g, ' ')
     },
@@ -195,29 +236,49 @@ export default {
         this.s.exportSettings = []
       }
     },
-    async readShot() {
+    async readShot(quiet = false) {
       if (!this.s.inAvid) return
-      this.reading = true
-      this.s.shotMessage = ''
+      if (this._readInFlight) return // avoid overlapping polls
+      this._readInFlight = true
+      if (!quiet) this.reading = true
       try {
         this.s.shot = await tl.getCurrentShot()
+        if (quiet) this.s.shotMessage = ''
       } catch (e) {
-        this.s.shot = null
-        this.s.shotMessage = 'Could not read shot: ' + e.message
+        if (!quiet) {
+          this.s.shot = null
+          this.s.shotMessage = 'Could not read shot: ' + e.message
+        }
       } finally {
         this.reading = false
+        this._readInFlight = false
       }
+    },
+    setMode(mode) {
+      this.s.projectMode = mode
+      this.s.projectToken = null
+      this.s.projectLabel = ''
     },
     async choose() {
       this.picking = true
       try {
-        const r = await api.pickProject()
+        const r = this.s.projectMode === 'new_per_shot'
+          ? await api.newProject()
+          : await api.pickProject()
         this.s.projectToken = r.target_project_token
         this.s.projectLabel = r.label
       } catch (e) {
-        this.s.projectLabel = 'picker unavailable (' + e.message + ')'
+        this.s.projectLabel = 'cancelled / unavailable'
       } finally {
         this.picking = false
+      }
+    },
+    async doClearJobs() {
+      try {
+        await api.clearJobs(false) // finished only
+        await this.refreshJobs()
+      } catch (e) {
+        this.s.message = 'Clear error: ' + e.message
       }
     },
     async doSend() {
@@ -227,26 +288,35 @@ export default {
           template_id: this.s.templateId,
           handles: Number(this.s.handles) || 0,
           project_mode: this.s.projectMode,
-          target_project_token:
-            this.s.projectMode === 'existing_project' ? this.s.projectToken : null
+          // token = existing project to open, or new-project save location
+          target_project_token: this.s.projectToken || null
         }
 
         if (this.s.inAvid) {
-          // 1. reserve a job + export dir from the helper
-          this.s.message = 'Preparing…'
-          const prep = await api.prepare()
-          // 2. grab the marked shot and export the reference via MCAPI
-          this.s.message = 'Exporting shot from Avid…'
-          const grabbed = await tl.grabMarkedShot({
-            exportDir: prep.export_dir,
+          // 1. grab the marked shot (subclip + name) so we know the shot name
+          this.s.message = 'Grabbing shot from Avid…'
+          const grabbed = await tl.grabShot({
             destBinPath: this.s.destBin,
-            exportSettingsName: this.s.exportSetting,
-            fileName: prep.reference_name
+            handles: Number(this.s.handles) || 0
           })
-          // 3. hand the real shot + reference to the helper
+          // apply the user's prefix/suffix to the plate name (not the Avid clip)
+          const named = (this.s.prefix || '') + grabbed.shot.shot_name + (this.s.suffix || '')
+          grabbed.shot.shot_name = named
+          // 2. reserve a <date>_<shot> folder (PLATE/RENDER) from the helper
+          this.s.message = 'Preparing…'
+          const prep = await api.prepare(named)
+          // 3. export the plate into the PLATE folder
+          this.s.message = 'Exporting plate…'
+          const referencePath = await tl.exportShot({
+            mobId: grabbed.exportMobId,
+            exportDir: prep.export_dir,
+            fileName: named,
+            exportSettingsName: this.s.exportSetting
+          })
+          // 4. hand the real shot + reference to the helper
           payload.job_id = prep.job_id
           payload.shot = grabbed.shot
-          payload.reference_path = grabbed.referencePath
+          payload.reference_path = referencePath
         } else {
           this.s.message = 'Sending (placeholder shot)…'
         }
@@ -266,11 +336,14 @@ export default {
         return
       }
       this.importingId = job.job_id
-      this.s.message = 'Importing render into Avid…'
+      // Return lands back in the same bin the shot was exported from; the editor
+      // cuts it in manually (keeps the original plate + its extendability).
+      const bin = this.s.destBin
+      this.s.message = 'Importing render into ' + bin + '…'
       try {
-        await tl.importReturn({ filePath: job.return_path, destBinPath: this.returnBin })
-        await api.markImported(job.job_id, this.returnBin)
-        this.s.message = 'Imported ' + job.job_id + ' into ' + this.returnBin
+        await tl.importReturn({ filePath: job.return_path, destBinPath: bin })
+        await api.markImported(job.job_id, bin)
+        this.s.message = 'Imported ' + job.job_id + ' into ' + bin
         await this.refreshJobs()
       } catch (e) {
         this.s.message = 'Import error: ' + e.message

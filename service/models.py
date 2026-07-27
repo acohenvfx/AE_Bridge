@@ -57,10 +57,15 @@ class SendRequest(BaseModel):
     reference_path: Optional[str] = None
 
 
+class PrepareRequest(BaseModel):
+    # Shot name (from the panel's grab) so the folder is <date>_<shot>.
+    name: Optional[str] = None
+
+
 class PrepareResponse(BaseModel):
     job_id: str
     export_dir: str
-    reference_name: str = "ref.mov"
+    reference_name: str = "ref"
 
 
 class PickProjectResponse(BaseModel):

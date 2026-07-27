@@ -368,21 +368,44 @@ panel. The helper owns the local filesystem side. Concretely:
   file is flushed) before building the comp; then builds/launches AE.
 - **AE launch:** via AppleScript `DoScriptFile` (not `AfterFX -r`), which runs
   the build script in the live app instead of stalling on the Home screen.
-- **Export location:** `~/Desktop/AEBridge/exports` (and `renders/`) so artists
-  can see the files; overridable via env.
+- **Export location:** one folder per shot under `~/Desktop/AEBridge/exports`,
+  named `<YYYYMMDD>_<shot>` with `PLATE/` (exported plate + `shot.json`) and
+  `RENDER/` (AE return) subfolders. The comp is pre-queued to render into
+  `RENDER/`; the watcher scans only `RENDER/`, so there's no plate/render
+  collision. The shot name comes from the panel's grab, so the flow is
+  grab → `prepare(name)` → export. Overridable via env.
 
 **Return trip (built):** the build script pre-queues the comp to render into the
 job's watch dir (`~/Desktop/AEBridge/renders/<job>`). A helper background thread
 (`service/watcher.py`) watches for a completed render (size-stable) and flips the
 job `ready_in_ae → returned`. The panel polls `/jobs`, shows **Import to Avid**,
-runs the MCAPI `ImportFile` into an `AEBridge_Returns` bin, and calls
-`POST /return/{job}/imported` to close the job (`→ done`). Path safety: returns
-must resolve under `watch_root`.
+runs the MCAPI `ImportFile` **into the same bin the shot was exported from**
+(`AEBridge_Temps`), and calls `POST /return/{job}/imported` to close the job
+(`→ done`). Path safety: returns must resolve under `watch_root`.
 
-Still to do: auto link-and-swap the return into the record sequence at the shot
-TC (`/return/{job}/swap` exists but does a stubbed edit), and `ffprobe`
-validation. `integrations/mcapi.py` remains only as a dev fallback for running
-the panel outside Avid.
+**No destructive sequence swap by design.** Overwriting the plate with a flat
+render loses extendability (no source link, no handles), so AEBridge returns the
+temp to the bin and the editor cuts it in — the original plate stays intact.
+
+**Handles from source media.** The grab uses
+`CreateSubClip(create_new_sequence=true)` — it wraps the marked range in one
+sequence (the correct, single export target). Those subclips still reference the
+**source master clips**, so `add_frames_at_head/end = handles` pulls the source
+clip's own media (real handles), clamped to available source frames. Using
+`create_new_sequence=false` was tried but MC then emits a loose subclip per
+clip/track and the wrong one gets exported — avoid it. `/return/{job}/swap` remains a stub and is not
+used.
+
+**Panel UX routes.** `POST /new-project` opens a native *save-as* `.aep` dialog
+(name + location) for new-project mode; `POST /jobs/clear?all=` clears finished
+(or all) jobs. The panel also: applies a user prefix/suffix to the plate name
+(the Avid clip keeps the marker name), auto-refreshes the current-shot readout
+(polls, since MCAPI has no push events), and remembers the last-used export
+setting / prefix / suffix / project mode in `localStorage`.
+
+Still possible: `ffprobe` validation of the return vs. the sidecar.
+`integrations/mcapi.py` remains only as a dev fallback for running the panel
+outside Avid.
 
 ## Resolved decisions
 

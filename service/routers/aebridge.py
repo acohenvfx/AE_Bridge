@@ -75,6 +75,7 @@ from ..models import (
     JobState,
     JobView,
     PickProjectResponse,
+    PrepareRequest,
     PrepareResponse,
     ProjectMode,
     SendRequest,
@@ -82,7 +83,12 @@ from ..models import (
     TemplateInfo,
     ValidationReport,
 )
-from ..paths import PathNotAllowed, ensure_within, validate_aep_selection
+from ..paths import (
+    PathNotAllowed,
+    ensure_within,
+    validate_aep_save_target,
+    validate_aep_selection,
+)
 
 router = APIRouter(prefix="/v1/aebridge")
 
@@ -142,23 +148,54 @@ def pick_project(path: Optional[str] = None) -> PickProjectResponse:
     return PickProjectResponse(target_project_token=token, label=resolved.name)
 
 
+@router.post("/new-project", response_model=PickProjectResponse)
+def new_project(path: Optional[str] = None) -> PickProjectResponse:
+    """Open a native 'save new .aep' dialog (name + location) and return a token.
+    Used by new-project mode so the editor names/places the project."""
+    selected = path if path is not None else macos.choose_save_aep()
+    if selected is None:
+        raise HTTPException(status_code=400, detail="no location chosen")
+    try:
+        resolved = validate_aep_save_target(selected)
+    except PathNotAllowed as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    token = store.register_project(resolved)
+    return PickProjectResponse(target_project_token=token, label=resolved.name)
+
+
 # --- prepare (Avid path) ---------------------------------------------------
+def _sanitize(name: Optional[str]) -> str:
+    s = "".join(c if c.isalnum() or c in "-_." else "_" for c in (name or "").strip())
+    return s.strip("_.") or "shot"
+
+
 @router.post("/prepare", response_model=PrepareResponse)
-def prepare() -> PrepareResponse:
-    """Reserve a job + return an export directory (under export_root) for the
-    panel to export the reference into via MCAPI. Path authority stays here."""
-    job_id = store.new_job_id("shot")
-    job_export_dir = settings.roots.export_root / job_id
-    job_export_dir.mkdir(parents=True, exist_ok=True)
-    ensure_within(job_export_dir, [settings.roots.export_root])
-    # Base name only — MC's export preset appends its own extension (avoids ref.mov.mov).
-    return PrepareResponse(job_id=job_id, export_dir=str(job_export_dir), reference_name="ref")
+def prepare(req: Optional[PrepareRequest] = None) -> PrepareResponse:
+    """Reserve a job + a per-shot export directory named <date>_<shot>. The panel
+    exports the plate here AND After Effects renders the return here (one folder
+    per shot). Path authority stays in the helper."""
+    stamp = datetime.now().strftime("%Y%m%d")
+    base = f"{stamp}_{_sanitize(req.name if req else None)}"
+    job_id = base
+    n = 2
+    while store.get(job_id) is not None or (settings.roots.export_root / job_id).exists():
+        job_id = f"{base}_{n}"
+        n += 1
+    # <date>_<shot>/PLATE  (exported plate)   and   /RENDER  (AE return)
+    plate_dir = settings.roots.export_root / job_id / "PLATE"
+    render_dir = settings.roots.export_root / job_id / "RENDER"
+    plate_dir.mkdir(parents=True, exist_ok=True)
+    render_dir.mkdir(parents=True, exist_ok=True)
+    ensure_within(plate_dir, [settings.roots.export_root])
+    # Base name only — MC's export preset appends its own extension.
+    return PrepareResponse(job_id=job_id, export_dir=str(plate_dir), reference_name="ref")
 
 
 # --- send ------------------------------------------------------------------
 @router.post("/send", response_model=JobView)
 def send(req: SendRequest) -> JobView:
     target_project: Optional[Path] = None
+    new_aep_path: Optional[Path] = None
     if req.project_mode == ProjectMode.existing_project:
         token = req.target_project_token or store.session.target_project_token
         if not token:
@@ -168,6 +205,11 @@ def send(req: SendRequest) -> JobView:
             raise HTTPException(status_code=400, detail="unknown project token")
         # Re-validate at use time.
         target_project = validate_aep_selection(target_project)
+    elif req.project_mode == ProjectMode.new_per_shot and req.target_project_token:
+        # Optional: editor chose where to save the new project via the dialog.
+        chosen = store.resolve_token(req.target_project_token)
+        if chosen is not None:
+            new_aep_path = validate_aep_save_target(chosen)
 
     template_path = _resolve_template(req.template_id)
 
@@ -191,13 +233,13 @@ def send(req: SendRequest) -> JobView:
     job = Job(job_id=job_id, project_mode=req.project_mode)
     store.add(job)
 
-    job_export_dir = settings.roots.export_root / job_id
-    job_export_dir.mkdir(parents=True, exist_ok=True)
-
-    # Where AE will render the return; the watcher polls this dir.
-    watch_dir = settings.roots.watch_root / job_id
-    watch_dir.mkdir(parents=True, exist_ok=True)
-    job.watch_dir = watch_dir
+    # One folder per shot with PLATE + RENDER subfolders.
+    job_root = settings.roots.export_root / job_id
+    plate_dir = job_root / "PLATE"
+    render_dir = job_root / "RENDER"
+    plate_dir.mkdir(parents=True, exist_ok=True)
+    render_dir.mkdir(parents=True, exist_ok=True)
+    job.watch_dir = render_dir  # AE renders here; the watcher scans it
 
     # Reference: the panel exported it via MCAPI (validate under export_root),
     # else fall back to a generated placeholder plate (dev / no real export).
@@ -206,15 +248,15 @@ def send(req: SendRequest) -> JobView:
             claimed = ensure_within(req.reference_path, [settings.roots.export_root])
         except PathNotAllowed as e:
             raise HTTPException(status_code=400, detail=f"reference outside export root: {e}")
-        ref_path = _resolve_exported_reference(claimed, job_export_dir)
+        ref_path = _resolve_exported_reference(claimed, plate_dir)
         if ref_path is None:
             raise HTTPException(
                 status_code=400,
-                detail=f"no exported media found in {job_export_dir} "
+                detail=f"no exported media found in {plate_dir} "
                 f"(expected {claimed.name} or another movie file)",
             )
     else:
-        ref_path = job_export_dir / "ref.mov"
+        ref_path = plate_dir / "ref.mov"
         ensure_within(ref_path, [settings.roots.export_root])
         mcapi.export_reference(str(ref_path), req.handles)
         if not (ref_path.exists() and ref_path.stat().st_size > 0):
@@ -244,9 +286,9 @@ def send(req: SendRequest) -> JobView:
         created=datetime.now(timezone.utc).isoformat(),
     )
 
-    # Render output goes into the job's watch dir, named after the shot.
+    # Render output goes into the RENDER subfolder, named after the shot.
     safe_name = "".join(c if c.isalnum() or c in "-_. " else "_" for c in shot["shot_name"]).strip() or "shot"
-    render_output = str(watch_dir / f"{safe_name}.mov")
+    render_output = str(render_dir / f"{safe_name}.mov")
 
     aep_path, jsx_path = ae.prepare_comp(
         sidecar=sidecar,
@@ -256,10 +298,11 @@ def send(req: SendRequest) -> JobView:
         project_mode=req.project_mode,
         target_project=target_project,
         render_output=render_output,
+        new_aep_path=new_aep_path,
     )
     sidecar.aep_path = str(aep_path)
 
-    sidecar_path = job_export_dir / "shot.json"
+    sidecar_path = plate_dir / "shot.json"
     sidecar_path.write_text(json.dumps(sidecar.model_dump(by_alias=True), indent=2))
 
     job.reference_path = ref_path
@@ -283,6 +326,14 @@ def send(req: SendRequest) -> JobView:
 @router.get("/jobs", response_model=list[JobView])
 def list_jobs() -> list[JobView]:
     return [j.view() for j in store.all()]
+
+
+@router.post("/jobs/clear")
+def clear_jobs(all: bool = False) -> dict:
+    """Clear the jobs list. By default only finished jobs (done/error); pass
+    all=true to clear everything (in-flight jobs keep their watch state)."""
+    removed = store.clear_jobs(only_finished=not all)
+    return {"removed": removed}
 
 
 @router.get("/jobs/{job_id}", response_model=JobView)
@@ -342,7 +393,7 @@ def mark_imported(job_id: str, req: ImportRequest) -> JobView:
     if job.return_path is None:
         raise HTTPException(status_code=409, detail="no return detected yet")
     try:
-        ensure_within(job.return_path, [settings.roots.watch_root])
+        ensure_within(job.return_path, [settings.roots.export_root])
     except PathNotAllowed as e:
         raise HTTPException(status_code=400, detail=str(e))
     job.return_bin = req.target_bin or _default_return_bin(job)

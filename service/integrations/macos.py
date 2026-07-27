@@ -35,3 +35,33 @@ def choose_aep() -> Optional[str]:
     if not path or path == "__CANCELLED__":
         return None
     return path
+
+
+def _save_script(default_name: str) -> str:
+    safe = (default_name or "AEBridge").replace('"', "'")
+    return (
+        "try\n"
+        f'  set f to choose file name with prompt "Name the new After Effects project" '
+        f'default name "{safe}.aep"\n'
+        "  POSIX path of f\n"
+        "on error number -128\n"
+        '  return "__CANCELLED__"\n'
+        "end try"
+    )
+
+
+def choose_save_aep(default_name: str = "AEBridge") -> Optional[str]:
+    """Open a native 'save as .aep' dialog (name + location). None if cancelled."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        out = subprocess.run(
+            ["osascript", "-e", _save_script(default_name)],
+            capture_output=True, text=True, timeout=300,
+        )
+    except Exception:
+        return None
+    path = (out.stdout or "").strip()
+    if not path or path == "__CANCELLED__":
+        return None
+    return path

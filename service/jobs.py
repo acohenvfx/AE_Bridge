@@ -106,6 +106,17 @@ class Store:
     def all(self) -> list[Job]:
         return list(self._jobs.values())
 
+    def clear_jobs(self, only_finished: bool = True) -> int:
+        finished = {JobState.done, JobState.error}
+        with self._lock:
+            if only_finished:
+                ids = [k for k, j in self._jobs.items() if j.state in finished]
+            else:
+                ids = list(self._jobs.keys())
+            for k in ids:
+                self._jobs.pop(k, None)
+        return len(ids)
+
     # --- project tokens ---
     def register_project(self, path: Path) -> str:
         token = "proj_" + secrets.token_hex(8)

@@ -157,6 +157,14 @@ _JSX_TEMPLATE = r"""
                     var foot = proj.importFile(io);
                     var l = comp.layers.add(foot);
                     l.name = "PLATE - " + P.shot_name;
+                    // Size the comp to the actual plate length (frame_count from
+                    // Avid columns is unreliable); AE knows the real duration.
+                    try {
+                        if (foot.duration && foot.duration > 0) {
+                            comp.duration = foot.duration;
+                            l.startTime = 0;
+                        }
+                    } catch (e) {}
                     addedPlate = true;
                 } catch (e) {
                     reason = "import error: " + e.toString() + " | " + P.reference;
@@ -209,6 +217,7 @@ def prepare_comp(
     project_mode: ProjectMode,
     target_project: Optional[Path],
     render_output: str = "",
+    new_aep_path: Optional[Path] = None,
 ) -> tuple[Path, Path]:
     """Write the ExtendScript that builds the comp. Returns (aep_path, jsx_path)."""
     job_dir = aep_work_root / sidecar.job_id
@@ -217,6 +226,9 @@ def prepare_comp(
     if project_mode == ProjectMode.existing_project:
         assert target_project is not None
         aep_path = target_project
+    elif new_aep_path is not None:
+        # Editor chose where to save the new project via the dialog.
+        aep_path = new_aep_path
     else:
         aep_path = job_dir / "comp.aep"
 

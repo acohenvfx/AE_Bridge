@@ -10,7 +10,14 @@ export const listJobs = () => getJSON('/v1/aebridge/jobs')
 export const pickProject = () =>
   callHelper('/v1/aebridge/pick-project', { method: 'POST' }, { dialog: true })
 
-export const prepare = () => postJSON('/v1/aebridge/prepare')
+// Opens a native 'save new .aep' dialog (name + location).
+export const newProject = () =>
+  callHelper('/v1/aebridge/new-project', { method: 'POST' }, { dialog: true })
+
+export const clearJobs = (all = false) =>
+  postJSON('/v1/aebridge/jobs/clear' + (all ? '?all=true' : ''))
+
+export const prepare = (name) => postJSON('/v1/aebridge/prepare', { name: name || null })
 export const send = (payload) => postJSON('/v1/aebridge/send', payload)
 export const swap = (jobId) => postJSON(`/v1/aebridge/return/${jobId}/swap`)
 // Panel does the MCAPI ImportFile itself; this just records state on the helper.

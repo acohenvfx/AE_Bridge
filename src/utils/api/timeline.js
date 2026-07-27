@@ -274,14 +274,12 @@ export async function ensureBin(binName) {
 }
 
 // --- subclip from timeline marks ------------------------------------------
-export async function createSubclipFromMarks({ sequenceMobId, destBinPath }) {
+export async function createSubclipFromMarks({ sequenceMobId, destBinPath, handles = 0, createNewSequence = true }) {
   const client = requireClient()
   const F = GetListOfBinItemsRequestBody.BinItemFlags
   await ensureBin(destBinPath)
   const binPath = await resolveBinPath(destBinPath)
 
-  // Snapshot all items + just the sequences, so we can find both the new
-  // subclip(s) and the new sequence (the export target).
   const beforeAll = await listBinItems(binPath).catch(() => [])
   const beforeAllIds = new Set(beforeAll.map((i) => i.mobId))
   const beforeSeqIds = new Set(
@@ -298,11 +296,16 @@ export async function createSubclipFromMarks({ sequenceMobId, destBinPath }) {
   // override use_marks_bounds with a 0->0 range. Set -1 so marks win.
   body.setHeadFrame(-1)
   body.setEndFrame(-1)
-  body.setCreateNewSequence(true) // a sequence so ExportFile accepts it
+  // create_new_sequence=true wraps the source subclips in ONE sequence (the
+  // correct, single export target). The subclips still reference the source
+  // master clips, so add_frames pulls the source clip's own media (true
+  // handles), clamped to available source frames.
+  body.setCreateNewSequence(createNewSequence)
   body.setEnabledTracksOnly(false)
   body.setRetainMarkers(true)
-  body.setAddFramesAtHead(0)
-  body.setAddFramesAtEnd(0)
+  const h = Math.max(0, Number(handles) || 0)
+  body.setAddFramesAtHead(h)
+  body.setAddFramesAtEnd(h)
   req.setBody(body)
   await callUnary(client, 'createSubClip', req, getAccessTokenMetadata())
 
@@ -312,14 +315,14 @@ export async function createSubclipFromMarks({ sequenceMobId, destBinPath }) {
     throw new Error('Subclip created but could not be located in ' + binPath +
       ' (is IN/OUT marked on the timeline?)')
   }
-  // The export target is the new SEQUENCE.
-  let sequence = null
-  if (F) {
+  // Export target: the new sequence (if we made one) else the new subclip.
+  let exportMob = null
+  if (createNewSequence && F) {
     const afterSeq = await listBinItems(binPath, [F.SEQUENCES]).catch(() => [])
-    sequence = afterSeq.find((i) => !beforeSeqIds.has(i.mobId)) || null
+    exportMob = afterSeq.find((i) => !beforeSeqIds.has(i.mobId)) || null
   }
-  if (!sequence) sequence = created[0] // fallback
-  return { sequence, created }
+  if (!exportMob) exportMob = created[0]
+  return { sequence: exportMob, created }
 }
 
 // --- export settings + export ---------------------------------------------
@@ -415,14 +418,13 @@ export async function importReturn({ filePath, destBinPath, importSettingsName =
 }
 
 // --- orchestrator ----------------------------------------------------------
-// Grab the marked shot, export it to `exportDir`, return { shot, referencePath }.
-export async function grabMarkedShot({ exportDir, destBinPath, exportSettingsName, fileName = 'ref.mov' }) {
+// Grab the marked shot (subclip + rename), return { shot, exportMobId } WITHOUT
+// exporting — so the caller can name the export folder after the shot first.
+export async function grabShot({ destBinPath, handles = 0 }) {
   const shot = await getCurrentShot()
-  const { sequence, created } = await createSubclipFromMarks({ sequenceMobId: shot.mobId, destBinPath })
+  const { sequence, created } = await createSubclipFromMarks({ sequenceMobId: shot.mobId, destBinPath, handles })
 
-  // Prefer the marker comment inside the grabbed range as the shot name, and
-  // rename BOTH the new sequence and its subclip(s) to match (markers retained
-  // via retain_markers).
+  // Prefer the marker comment as the shot name; rename the sequence + subclip(s).
   let name = sequence.mobName || shot.name
   try {
     const label = markerLabel(await getMarkers(sequence.mobId))
@@ -437,17 +439,6 @@ export async function grabMarkedShot({ exportDir, destBinPath, exportSettingsNam
   }
 
   const subCols = await getMobColumns(sequence.mobId).catch(() => ({}))
-  // Name the exported movie after the shot (marker comment); MC adds the ext.
-  const safeBase = String(name || fileName || 'ref')
-    .replace(/[/\\:*?"<>|]+/g, '_')
-    .trim() || 'ref'
-  const outputPath = exportDir.replace(/\/$/, '') + '/' + safeBase
-  const referencePath = await exportMob({
-    mobId: sequence.mobId,
-    outputPath,
-    exportSettingsName,
-  })
-  // Use the SUBCLIP's own Start/End (the grabbed shot), not the sequence's.
   const startTC = pick(subCols, ['Start', 'Mark IN'])
   const endTC = pick(subCols, ['End', 'Mark OUT'])
   const fps = Math.round(parseFloat(shot.frameRate) || 24)
@@ -459,6 +450,8 @@ export async function grabMarkedShot({ exportDir, destBinPath, exportSettingsNam
   if (!frameCount || frameCount < 0) frameCount = 0
 
   return {
+    exportMobId: sequence.mobId,
+    createdMobIds: created.map((i) => i.mobId),
     shot: {
       shot_name: name,
       sequence_name: shot.name,
@@ -470,10 +463,14 @@ export async function grabMarkedShot({ exportDir, destBinPath, exportSettingsNam
       resolution: shot.resolution,
       frame_count: frameCount,
     },
-    referencePath,
-    sequenceMobId: sequence.mobId,
-    createdMobIds: created.map((i) => i.mobId),
   }
+}
+
+// Export the grabbed shot to `exportDir`, named after the shot. Returns the path.
+export async function exportShot({ mobId, exportDir, fileName, exportSettingsName }) {
+  const safeBase = String(fileName || 'ref').replace(/[/\\:*?"<>|]+/g, '_').trim() || 'ref'
+  const outputPath = exportDir.replace(/\/$/, '') + '/' + safeBase
+  return exportMob({ mobId, outputPath, exportSettingsName })
 }
 
 // HH:MM:SS:FF -> total frames (non-drop; TC labels at round(fps)).

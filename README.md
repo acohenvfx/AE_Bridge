@@ -84,15 +84,21 @@ yarn build:avpi:release      # -> dist/AEBridge.avpi (release: helper serves UI)
 - **Back (AE → Avid):** the editor renders the queued comp; the helper's
   watch-folder loop detects the finished render and flips the job to
   `returned`; the panel shows **Import to Avid** and does the MCAPI `ImportFile`
-  into an `AEBridge_Returns` bin.
+  **back into the same bin the shot was exported from**. The editor cuts it in
+  by hand — so the original plate keeps its source link and handles, and nothing
+  on the timeline is destructively overwritten.
+
+The grabbed shot is padded by the **handles** value (both ends, clamped to
+available frames) so the temp has trim room.
 
 Real on macOS: MCAPI grab + import, ExtendScript comp build + render-queue
 setup + AE launch, native `.aep` picker, path-safe export/watch dirs,
 export- and render-completion waiting.
 
-**Next:** auto **link-and-swap** the return into the record sequence at the
-shot's TC (currently it imports to a bin and the editor cuts it in), and
-`ffprobe` validation of the return against the sidecar.
+**Deliberately not done:** auto-swapping the render *into* the record sequence.
+A flat render in place of the plate loses extendability, so AEBridge returns to
+the bin and leaves the cut to the editor. (`ffprobe` validation of the return is
+still a possible add.)
 
 See `docs/BUILD_AND_INSTALL.md` to build/run and `docs/AEBRIDGE_DESIGN.md` for
 the route contract.
