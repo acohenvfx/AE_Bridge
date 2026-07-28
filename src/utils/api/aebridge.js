@@ -6,13 +6,18 @@ export const getAeStatus = () => getJSON('/v1/aebridge/ae')
 export const listTemplates = () => getJSON('/v1/aebridge/templates')
 export const listJobs = () => getJSON('/v1/aebridge/jobs')
 
-// Opens the helper's native .aep picker (waits on the user).
-export const pickProject = () =>
-  callHelper('/v1/aebridge/pick-project', { method: 'POST' }, { dialog: true })
+// Opens the helper's native .aep picker (no path), or re-registers a remembered
+// path (path given) to get a fresh token without a dialog.
+export const pickProject = (path) =>
+  path
+    ? postJSON('/v1/aebridge/pick-project?path=' + encodeURIComponent(path))
+    : callHelper('/v1/aebridge/pick-project', { method: 'POST' }, { dialog: true })
 
-// Opens a native 'save new .aep' dialog (name + location).
-export const newProject = () =>
-  callHelper('/v1/aebridge/new-project', { method: 'POST' }, { dialog: true })
+// Opens a native 'save new .aep' dialog, or re-registers a remembered path.
+export const newProject = (path) =>
+  path
+    ? postJSON('/v1/aebridge/new-project?path=' + encodeURIComponent(path))
+    : callHelper('/v1/aebridge/new-project', { method: 'POST' }, { dialog: true })
 
 export const clearJobs = (all = false) =>
   postJSON('/v1/aebridge/jobs/clear' + (all ? '?all=true' : ''))

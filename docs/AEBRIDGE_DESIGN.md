@@ -368,12 +368,13 @@ panel. The helper owns the local filesystem side. Concretely:
   file is flushed) before building the comp; then builds/launches AE.
 - **AE launch:** via AppleScript `DoScriptFile` (not `AfterFX -r`), which runs
   the build script in the live app instead of stalling on the Home screen.
-- **Export location:** one folder per shot under `~/Desktop/AEBridge/exports`,
-  named `<YYYYMMDD>_<shot>` with `PLATE/` (exported plate + `shot.json`) and
-  `RENDER/` (AE return) subfolders. The comp is pre-queued to render into
-  `RENDER/`; the watcher scans only `RENDER/`, so there's no plate/render
-  collision. The shot name comes from the panel's grab, so the flow is
-  grab → `prepare(name)` → export. Overridable via env.
+- **Export location (flat):** all plates go in `~/Desktop/AEBridge/plates` and
+  all AE renders in `~/Desktop/AEBridge/render`, each file named by shot
+  (`<shot>.mov`, sidecar `<shot>.json`). No per-shot subfolders. The comp is
+  pre-queued to render into the shared render folder; the helper matches each
+  render back to its job by **filename stem** (`job.render_stem`), so shots
+  don't pick up each other's files. Overridable via
+  `AEBRIDGE_EXPORT_ROOT` / `AEBRIDGE_WATCH_ROOT`.
 
 **Return trip (built):** the build script pre-queues the comp to render into the
 job's watch dir (`~/Desktop/AEBridge/renders/<job>`). A helper background thread

@@ -91,6 +91,7 @@ class PrepareResponse(BaseModel):
 class PickProjectResponse(BaseModel):
     target_project_token: str
     label: str
+    path: str = ""
 
 
 class ImportRequest(BaseModel):

@@ -9,6 +9,7 @@ export const aebridge = Vue.observable({
   projectMode: 'new_per_shot', // or 'existing_project'
   projectToken: null,
   projectLabel: '',
+  projectPath: '', // remembered across restarts; re-registered for a fresh token
   templates: [],
   jobs: [],
   helper: { online: false, version: null },

@@ -49,12 +49,12 @@ class Roots:
     @staticmethod
     def default() -> "Roots":
         base = _default_base()
-        # Exports (and returns) live on the Desktop so they're easy to find.
+        # Flat folders on the Desktop: all plates in one, all AE renders in one.
         desktop = Path.home() / "Desktop" / "AEBridge"
         return Roots(
             base=base,
-            export_root=Path(os.environ.get("AEBRIDGE_EXPORT_ROOT", desktop / "exports")),
-            watch_root=Path(os.environ.get("AEBRIDGE_WATCH_ROOT", desktop / "renders")),
+            export_root=Path(os.environ.get("AEBRIDGE_EXPORT_ROOT", desktop / "plates")),
+            watch_root=Path(os.environ.get("AEBRIDGE_WATCH_ROOT", desktop / "render")),
             # template_root ships WITH the helper runtime (same for every artist).
             template_root=Path(
                 os.environ.get("AEBRIDGE_TEMPLATE_ROOT", base / "templates")

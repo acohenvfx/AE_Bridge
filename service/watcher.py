@@ -18,13 +18,19 @@ from .models import JobState
 _MEDIA_EXTS = {".mov", ".mxf", ".mp4", ".m4v", ".avi", ".mkv"}
 
 
-def _newest_media(watch_dir: Path) -> Optional[Path]:
+def _newest_media(watch_dir: Path, stem: Optional[str] = None) -> Optional[Path]:
+    """Newest render in the shared render folder. If a stem is given (the shot
+    name), only match files with that stem so jobs don't pick up each other's
+    renders."""
     if not watch_dir or not watch_dir.exists():
         return None
-    files = [
-        p for p in watch_dir.rglob("*")
-        if p.is_file() and p.suffix.lower() in _MEDIA_EXTS and p.stat().st_size > 0
-    ]
+    files = []
+    for p in watch_dir.glob("*"):
+        if not (p.is_file() and p.suffix.lower() in _MEDIA_EXTS and p.stat().st_size > 0):
+            continue
+        if stem and not (p.stem == stem or p.stem.startswith(stem)):
+            continue
+        files.append(p)
     return max(files, key=lambda p: p.stat().st_mtime) if files else None
 
 
@@ -58,7 +64,7 @@ class ReturnWatcher:
         for job in store.all():
             if job.state != JobState.ready_in_ae or not job.watch_dir:
                 continue
-            cand = _newest_media(job.watch_dir)
+            cand = _newest_media(job.watch_dir, job.render_stem)
             if cand is None:
                 continue
             size = cand.stat().st_size

@@ -39,6 +39,8 @@ import {
   ImportFileRequestBody,
   GetMobTrackInfoRequest,
   GetMobTrackInfoRequestBody,
+  ExportEDLRequest,
+  ExportEDLRequestBody,
   TrackLabel,
   TrackList,
   ViewerType,
@@ -311,8 +313,38 @@ export function videoTracks(tracks) {
     .sort((a, b) => a.number - b.number)
 }
 
+// Run ExportEDL for one track; returns the EDL file path MC wrote.
+export async function exportEdlForTrack(mobId, track) {
+  const client = requireClient()
+  const req = new ExportEDLRequest()
+  const body = new ExportEDLRequestBody()
+  body.setMobId(mobId)
+  const tl = new TrackList()
+  const lbl = new TrackLabel()
+  lbl.setType(track.type)
+  lbl.setNumber(track.number)
+  tl.setTrackLabelsList([lbl])
+  body.setTrackList(tl)
+  req.setBody(body)
+  const res = await callUnary(client, 'exportEDL', req, getAccessTokenMetadata(), 120000)
+  const b = res && res.getBody ? res.getBody() : null
+  return b && b.getPath ? String(b.getPath() || '').trim() : ''
+}
+
+// From parsed EDL clips, find the one whose record span contains the playhead.
+export function findClipAtPlayhead(clips, playheadTC, fps = 24) {
+  const p = tcToFrames(playheadTC, fps)
+  return (clips || []).find((c) => {
+    const a = tcToFrames(c.rec_in, fps)
+    const b = tcToFrames(c.rec_out, fps)
+    return p >= a && p < b
+  }) || null
+}
+
 // One CreateSubClip; returns the new SUBCLIP items (via SUBCLIPS-flag diff).
-async function createRawSubclip({ mobId, binPath, useMarks, useClipBounds, trackList, addFrames }) {
+// Pass headTimecode/endTimecode (record TC) to target a specific clip span, or
+// useMarks for the marked range.
+async function createRawSubclip({ mobId, binPath, useMarks, useClipBounds, trackList, addFramesHead = 0, addFramesEnd = 0, headTimecode, endTimecode }) {
   const client = requireClient()
   const F = GetListOfBinItemsRequestBody.BinItemFlags
   const before = new Set(F ? (await listBinItems(binPath, [F.SUBCLIPS]).catch(() => [])).map((i) => i.mobId) : [])
@@ -324,11 +356,13 @@ async function createRawSubclip({ mobId, binPath, useMarks, useClipBounds, track
   body.setUseClipBounds(!!useClipBounds)
   body.setHeadFrame(-1)
   body.setEndFrame(-1)
+  if (headTimecode) body.setHeadTimecode(headTimecode)
+  if (endTimecode) body.setEndTimecode(endTimecode)
   body.setCreateNewSequence(false)
   body.setEnabledTracksOnly(false)
   body.setRetainMarkers(true)
-  body.setAddFramesAtHead(Math.max(0, addFrames || 0))
-  body.setAddFramesAtEnd(Math.max(0, addFrames || 0))
+  body.setAddFramesAtHead(Math.max(0, addFramesHead || 0))
+  body.setAddFramesAtEnd(Math.max(0, addFramesEnd || 0))
   if (trackList && trackList.length) {
     const tl = new TrackList()
     tl.setTrackLabelsList(trackList.map((t) => {
@@ -345,7 +379,47 @@ async function createRawSubclip({ mobId, binPath, useMarks, useClipBounds, track
   return after.filter((i) => !before.has(i.mobId))
 }
 
-async function grabSourceHandledMob({ sequenceMobId, destBinPath, handles, scratchBin = 'AEBridge_Scratch' }) {
+const handlesUnavailable = (e) =>
+  /requested frames not available|invalid add_frame/i.test(String((e && e.message) || e))
+
+function durFrames(cols, fps) {
+  const s = tcToFrames(pick(cols, ['Start', 'Mark IN']), fps)
+  const e = tcToFrames(pick(cols, ['End', 'Mark OUT']), fps)
+  return e - s
+}
+
+// Extend a subclip by handles, dropping ONLY the edge the error names (so we
+// never guess a tail-only extension that could return the wrong range). A
+// rejected CreateSubClip creates no mob, so only the success makes a clip.
+async function extendWithHandles({ mobId, binPath, handles }) {
+  const h = Math.max(0, Number(handles) || 0)
+  let head = h
+  let end = h
+  for (let i = 0; i < 4; i += 1) {
+    try {
+      const items = await createRawSubclip({
+        mobId, binPath, useMarks: false, useClipBounds: true, trackList: null,
+        addFramesHead: head, addFramesEnd: end,
+      })
+      if (items.length) {
+        logMcapiVerbose('handles applied', { requested: h, head, end })
+        return { items, head, end }
+      }
+      return { items: [], head: 0, end: 0 }
+    } catch (e) {
+      if (!handlesUnavailable(e)) throw e
+      const msg = String((e && e.message) || e).toLowerCase()
+      if (/at_end/.test(msg) && end > 0) { end = 0 }
+      else if (/at_head/.test(msg) && head > 0) { head = 0 }
+      else if (head > 0 || end > 0) { head = 0; end = 0 }
+      else throw e
+      logMcapiVerbose('handle edge unavailable, reducing', { head, end, err: e.message })
+    }
+  }
+  return { items: [], head: 0, end: 0 }
+}
+
+async function grabSourceHandledMob({ sequenceMobId, playheadTC, parseEdl, destBinPath, handles, scratchBin = 'AEBridge_Scratch' }) {
   await ensureBin(destBinPath)
   const destPath = await resolveBinPath(destBinPath)
   await ensureBin(scratchBin)
@@ -353,31 +427,60 @@ async function grabSourceHandledMob({ sequenceMobId, destBinPath, handles, scrat
   const vids = videoTracks(await getMobTrackInfo(sequenceMobId))
   if (!vids.length) throw new Error('No enabled video track for source-handle grab')
   const v1 = vids[0]
+  const fps = 24
 
-  // Step 1: marked-portion subclip of the source master clip (intermediate) →
-  // goes in the scratch bin so it doesn't clutter the working bin.
-  const aItems = await createRawSubclip({
-    mobId: sequenceMobId, binPath: scratchPath, useMarks: true, useClipBounds: false,
-    trackList: [{ type: v1.type, number: v1.number }], addFrames: 0,
-  })
-  if (!aItems.length) throw new Error('source-handle step 1 made no subclip (IN/OUT marked?)')
-  const a = aItems[0]
-  logMcapiVerbose('source-handle step1 (scratch subclip of source)', a)
-
-  // Step 2: extend it by handles into the working bin — pulls the master's media.
-  const h = Math.max(0, Number(handles) || 0)
-  const bItems = h > 0
-    ? await createRawSubclip({ mobId: a.mobId, binPath: destPath, useMarks: false, useClipBounds: true, trackList: null, addFrames: h })
-    : []
-  if (!bItems.length) {
-    // No handles requested/available: promote step-1 into the working bin so the
-    // export target lives with the other temps (scratch keeps only the intermediate).
-    if (h > 0) logMcapiVerbose('source-handle step2 empty (no available handles) — exporting without handles', {})
-    const promoted = await createRawSubclip({ mobId: a.mobId, binPath: destPath, useMarks: false, useClipBounds: true, trackList: null, addFrames: 0 })
-    return { exportMob: promoted[0] || a, created: promoted.length ? promoted : aItems }
+  // Find the V1 clip under the playhead (via the V1 EDL) — this is THE shot,
+  // regardless of how wide the marked range is.
+  const edlPath = await exportEdlForTrack(sequenceMobId, v1)
+  const clips = (edlPath && parseEdl) ? await parseEdl(edlPath) : []
+  const target = findClipAtPlayhead(clips, playheadTC, fps)
+  if (!target) {
+    throw new Error('No V1 clip under the playhead (' + playheadTC + '). Park on the shot before Send.')
   }
-  logMcapiVerbose('source-handle step2 (extended by handles, in working bin)', bItems[0])
-  return { exportMob: bItems[0], created: bItems }
+  logMcapiVerbose('playhead clip', { playheadTC, clip: target.clip_name, rec_in: target.rec_in, rec_out: target.rec_out })
+
+  // Step 1: subclip exactly that clip's record span → source-master subclip in
+  // scratch (head_timecode/end_timecode instead of the marks).
+  const aItems = await createRawSubclip({
+    mobId: sequenceMobId, binPath: scratchPath, useMarks: false, useClipBounds: false,
+    trackList: [{ type: v1.type, number: v1.number }],
+    headTimecode: target.rec_in, endTimecode: target.rec_out,
+  })
+  if (!aItems.length) throw new Error('source-handle step 1 made no subclip for the playhead clip')
+  const a = aItems[0]
+  const aCols = await getMobColumns(a.mobId).catch(() => ({}))
+  const aDur = durFrames(aCols, fps)
+  logMcapiVerbose('source-handle step1 (scratch subclip of source)', { mob: a, start: pick(aCols, ['Start']), end: pick(aCols, ['End']), dur: aDur })
+
+  // Step 2: extend it by handles into the working bin.
+  const { items: bItems, head, end } = await extendWithHandles({ mobId: a.mobId, binPath: destPath, handles })
+
+  // Sanity-check the START + END positions, not just duration: the handled
+  // subclip must be [aStart - head, aEnd + end]. If the position is off (some
+  // clips extend to the wrong part of the source), discard it and export the
+  // exact marked-range subclip (step 1) directly — guaranteed-correct range.
+  if (bItems.length) {
+    const bCols = await getMobColumns(bItems[0].mobId).catch(() => ({}))
+    const aStart = tcToFrames(pick(aCols, ['Start']), fps)
+    const aEnd = tcToFrames(pick(aCols, ['End']), fps)
+    const bStart = tcToFrames(pick(bCols, ['Start']), fps)
+    const bEnd = tcToFrames(pick(bCols, ['End']), fps)
+    const startOk = Math.abs(bStart - (aStart - head)) <= 2
+    const endOk = Math.abs(bEnd - (aEnd + end)) <= 2
+    logMcapiVerbose('handled subclip position check', {
+      aStart: pick(aCols, ['Start']), aEnd: pick(aCols, ['End']),
+      bStart: pick(bCols, ['Start']), bEnd: pick(bCols, ['End']),
+      head, end, startOk, endOk,
+    })
+    if (!(startOk && endOk)) {
+      logMcapiVerbose('handled subclip wrong range — exporting exact marked range (no handles)', {})
+      return { exportMob: a, created: aItems, headHandles: 0, endHandles: 0 }
+    }
+  }
+
+  if (!bItems.length) throw new Error('source-handle step 2 produced no subclip in ' + destPath)
+  logMcapiVerbose('source-handle step2 (in working bin)', { mob: bItems[0], head, end })
+  return { exportMob: bItems[0], created: bItems, headHandles: head, endHandles: end }
 }
 
 // --- export settings + export ---------------------------------------------
@@ -475,11 +578,11 @@ export async function importReturn({ filePath, destBinPath, importSettingsName =
 // --- orchestrator ----------------------------------------------------------
 // Grab the marked shot (subclip + rename), return { shot, exportMobId } WITHOUT
 // exporting — so the caller can name the export folder after the shot first.
-export async function grabShot({ destBinPath, handles = 0 }) {
+export async function grabShot({ destBinPath, handles = 0, parseEdl = null }) {
   const shot = await getCurrentShot()
-  // Always grab from the SOURCE clip (handles come from the source's own media,
-  // never the sequence timeline).
-  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, destBinPath, handles })
+  // Grab the V1 clip under the playhead from its SOURCE master (handles from the
+  // source's own media, never the sequence timeline).
+  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, playheadTC: shot.playheadTC, parseEdl, destBinPath, handles })
   const sequence = r.exportMob
   const created = r.created
 

@@ -24,14 +24,40 @@ export function setVerboseMcapiLoggingEnabled(enabled) {
   }
 }
 
+// In-memory ring buffer so logs are visible in the panel (Avid's WebView has no
+// reachable console). Always captures; console output is gated by the verbose flag.
+const _logBuffer = []
+const _LOG_CAP = 300
+
+function _fmt(detail) {
+  if (detail === undefined || detail === '') return ''
+  if (typeof detail === 'string') return detail
+  try { return JSON.stringify(detail) } catch (_e) { return String(detail) }
+}
+
+function _push(kind, label, detail) {
+  const t = new Date().toLocaleTimeString()
+  _logBuffer.push({ t, kind, label, detail: _fmt(detail) })
+  if (_logBuffer.length > _LOG_CAP) _logBuffer.shift()
+}
+
+export function getMcapiLog() {
+  return _logBuffer.slice()
+}
+
+export function clearMcapiLog() {
+  _logBuffer.length = 0
+}
+
 export function logMcapiVerbose(label, detail) {
+  _push('info', label, detail)
   if (!isVerboseMcapiLoggingEnabled()) return
-  const payload = detail !== undefined ? detail : ''
   // eslint-disable-next-line no-console
-  console.log(`[MCAPI] ${label}`, payload)
+  console.log(`[MCAPI] ${label}`, detail !== undefined ? detail : '')
 }
 
 export function logMcapiVerboseError(label, err) {
+  _push('error', label, (err && err.message) || err)
   if (!isVerboseMcapiLoggingEnabled()) return
   // eslint-disable-next-line no-console
   console.error(`[MCAPI] ${label}`, err)

@@ -47,7 +47,7 @@
         </div>
         <div v-else class="eb-muted">{{ s.shotMessage || 'Click Refresh to read the record monitor.' }}</div>
         <div class="eb-muted" style="font-size:11.5px">
-          Mark IN/OUT around the shot on the timeline; Send grabs that range via a subclip.
+          Park the playhead on the shot; Send grabs that V1 clip from its source, with handles.
         </div>
       </div>
 
@@ -149,6 +149,25 @@
           </div>
         </div>
       </div>
+
+      <div class="eb-section">
+        <div class="eb-section-head">
+          <h3 class="eb-section-title">Log</h3>
+          <div class="eb-actions">
+            <button class="eb-btn eb-btn--ghost eb-btn--mini" @click="copyLog">{{ copied ? 'Copied ✓' : 'Copy' }}</button>
+            <button class="eb-btn eb-btn--ghost eb-btn--mini" @click="clearLog">Clear</button>
+          </div>
+        </div>
+        <div v-if="!logEntries.length" class="eb-muted">No log yet.</div>
+        <div v-else class="eb-console" ref="logbox">
+          <div v-for="(e, i) in logEntries" :key="i">
+            <span class="c-dim">{{ e.t }}</span>
+            <span :class="e.kind === 'error' ? 'c-bad' : 'c-accent'">{{ e.label }}</span>
+            <span v-if="e.detail"> {{ e.detail }}</span>
+          </div>
+        </div>
+        <textarea ref="logcopy" class="eb-hidden-copy" :value="logText" readonly aria-hidden="true"></textarea>
+      </div>
     </div>
   </div>
 </template>
@@ -157,11 +176,17 @@
 import { aebridge as state } from '~/store/toolState'
 import * as api from '~/utils/api/aebridge'
 import * as tl from '~/utils/api/timeline'
+import { getMcapiLog, clearMcapiLog } from '~/utils/api/mcapi'
 
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, picking: false, reading: false, importingId: null, _timer: null, _shotTimer: null }
+    return { s: state, picking: false, reading: false, importingId: null, logEntries: [], copied: false, _timer: null, _shotTimer: null, _logTimer: null }
+  },
+  computed: {
+    logText() {
+      return this.logEntries.map((e) => `${e.t} ${e.label}${e.detail ? ' ' + e.detail : ''}`).join('\n')
+    }
   },
   async mounted() {
     this.restorePrefs()
@@ -176,10 +201,12 @@ export default {
       this._shotTimer = setInterval(() => this.readShot(true), 1500)
     }
     this._timer = setInterval(this.refreshJobs, 4000)
+    this._logTimer = setInterval(() => { this.logEntries = getMcapiLog() }, 1000)
   },
   beforeDestroy() {
     if (this._timer) clearInterval(this._timer)
     if (this._shotTimer) clearInterval(this._shotTimer)
+    if (this._logTimer) clearInterval(this._logTimer)
   },
   watch: {
     's.exportSetting'(v) { this.savePref('exportSetting', v) },
@@ -198,6 +225,8 @@ export default {
         if (g('prefix') != null) this.s.prefix = g('prefix')
         if (g('suffix') != null) this.s.suffix = g('suffix')
         if (g('projectMode')) this.s.projectMode = g('projectMode')
+        if (g('projectPath') != null) this.s.projectPath = g('projectPath')
+        if (g('projectLabel') != null) this.s.projectLabel = g('projectLabel')
       } catch (e) {}
     },
     stateLabel(x) {
@@ -258,7 +287,7 @@ export default {
     setMode(mode) {
       this.s.projectMode = mode
       this.s.projectToken = null
-      this.s.projectLabel = ''
+      // keep projectPath/label so a remembered project survives a mode toggle
     },
     async choose() {
       this.picking = true
@@ -268,11 +297,40 @@ export default {
           : await api.pickProject()
         this.s.projectToken = r.target_project_token
         this.s.projectLabel = r.label
+        this.s.projectPath = r.path || ''
+        this.savePref('projectPath', this.s.projectPath)
+        this.savePref('projectLabel', this.s.projectLabel)
       } catch (e) {
         this.s.projectLabel = 'cancelled / unavailable'
       } finally {
         this.picking = false
       }
+    },
+    clearLog() {
+      clearMcapiLog()
+      this.logEntries = []
+    },
+    async copyLog() {
+      const text = this.logText
+      let ok = false
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text)
+          ok = true
+        }
+      } catch (e) { /* fall through */ }
+      if (!ok) {
+        // Fallback for restricted WebViews: select the hidden textarea + execCommand.
+        try {
+          const ta = this.$refs.logcopy
+          ta.style.display = 'block'
+          ta.select()
+          ok = document.execCommand('copy')
+          ta.style.display = ''
+        } catch (e) { /* ignore */ }
+      }
+      this.copied = ok
+      setTimeout(() => { this.copied = false }, 1500)
     },
     async doClearJobs() {
       try {
@@ -283,6 +341,23 @@ export default {
       }
     },
     async doSend() {
+      // Tokens don't survive a helper restart, but the remembered PATH does —
+      // re-register it for a fresh token so the last project sticks.
+      if (this.s.projectMode === 'existing_project' && !this.s.projectToken) {
+        if (this.s.projectPath) {
+          try {
+            const r = await api.pickProject(this.s.projectPath)
+            this.s.projectToken = r.target_project_token
+            this.s.projectLabel = r.label
+          } catch (e) {
+            this.s.message = 'Saved project not found (' + (this.s.projectLabel || this.s.projectPath) + ') — Choose .aep… again.'
+            return
+          }
+        } else {
+          this.s.message = 'Choose a project first (Choose .aep…), or switch to New project per shot.'
+          return
+        }
+      }
       this.s.sending = true
       try {
         const payload = {
@@ -298,7 +373,8 @@ export default {
           this.s.message = 'Grabbing shot from Avid…'
           const grabbed = await tl.grabShot({
             destBinPath: this.s.destBin,
-            handles: Number(this.s.handles) || 0
+            handles: Number(this.s.handles) || 0,
+            parseEdl: (edlPath) => api.parseEdl(edlPath).then((r) => r.clips)
           })
           // apply the user's prefix/suffix to the plate name (not the Avid clip)
           const named = (this.s.prefix || '') + grabbed.shot.shot_name + (this.s.suffix || '')
@@ -380,4 +456,15 @@ export default {
 }
 .job-name { font-size: 12px; color: var(--ink-2); }
 .job-state { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+
+.eb-console {
+  background: #070d16; border: 1px solid var(--line); border-radius: var(--r-ctrl);
+  font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5;
+  color: var(--ink-2); padding: 10px 12px; max-height: 260px; overflow: auto;
+  white-space: pre-wrap; word-break: break-word;
+}
+.eb-console .c-dim { color: var(--muted-2); margin-right: 6px; }
+.eb-console .c-accent { color: var(--accent); }
+.eb-console .c-bad { color: var(--bad); }
+.eb-hidden-copy { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
 </style>

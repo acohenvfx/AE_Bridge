@@ -43,6 +43,7 @@ class Job:
     sidecar_path: Optional[Path] = None
     aep_path: Optional[Path] = None
     watch_dir: Optional[Path] = None
+    render_stem: Optional[str] = None  # shared render folder → match this filename stem
     return_path: Optional[Path] = None
     return_bin: Optional[str] = None
     sidecar: Optional[Sidecar] = None

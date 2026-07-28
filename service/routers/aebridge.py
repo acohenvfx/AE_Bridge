@@ -19,13 +19,17 @@ _MEDIA_EXTS = {".mov", ".mxf", ".mp4", ".m4v", ".avi", ".mkv"}
 def _newest_media(claimed: Path, job_export_dir: Path) -> Optional[Path]:
     if claimed.exists() and claimed.stat().st_size > 0:
         return claimed
+    # Shared plates folder: match by the claimed filename stem (MC appends the
+    # codec extension), NOT just "newest" — which could be another shot's plate.
     search_dir = claimed.parent if str(claimed.parent).strip() else job_export_dir
+    stem = claimed.stem
     candidates = []
     for d in {search_dir, job_export_dir}:
         if d.exists():
             candidates += [
-                p for p in d.rglob("*")
+                p for p in d.glob("*")
                 if p.is_file() and p.suffix.lower() in _MEDIA_EXTS and p.stat().st_size > 0
+                and (p.stem == stem or p.stem.startswith(stem))
             ]
     return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
 
@@ -166,7 +170,7 @@ def pick_project(path: Optional[str] = None) -> PickProjectResponse:
     except PathNotAllowed as e:
         raise HTTPException(status_code=400, detail=str(e))
     token = store.register_project(resolved)
-    return PickProjectResponse(target_project_token=token, label=resolved.name)
+    return PickProjectResponse(target_project_token=token, label=resolved.name, path=str(resolved))
 
 
 @router.post("/new-project", response_model=PickProjectResponse)
@@ -181,7 +185,7 @@ def new_project(path: Optional[str] = None) -> PickProjectResponse:
     except PathNotAllowed as e:
         raise HTTPException(status_code=400, detail=str(e))
     token = store.register_project(resolved)
-    return PickProjectResponse(target_project_token=token, label=resolved.name)
+    return PickProjectResponse(target_project_token=token, label=resolved.name, path=str(resolved))
 
 
 # --- prepare (Avid path) ---------------------------------------------------
@@ -192,21 +196,18 @@ def _sanitize(name: Optional[str]) -> str:
 
 @router.post("/prepare", response_model=PrepareResponse)
 def prepare(req: Optional[PrepareRequest] = None) -> PrepareResponse:
-    """Reserve a job + a per-shot export directory named <date>_<shot>. The panel
-    exports the plate here AND After Effects renders the return here (one folder
-    per shot). Path authority stays in the helper."""
+    """Reserve a job. Flat layout: all plates go in the shared `plates` folder and
+    all AE renders in the shared `render` folder (files named by shot). Path
+    authority stays in the helper."""
     stamp = datetime.now().strftime("%Y%m%d")
     base = f"{stamp}_{_sanitize(req.name if req else None)}"
     job_id = base
     n = 2
-    while store.get(job_id) is not None or (settings.roots.export_root / job_id).exists():
+    while store.get(job_id) is not None:
         job_id = f"{base}_{n}"
         n += 1
-    # <date>_<shot>/PLATE  (exported plate)   and   /RENDER  (AE return)
-    plate_dir = settings.roots.export_root / job_id / "PLATE"
-    render_dir = settings.roots.export_root / job_id / "RENDER"
+    plate_dir = settings.roots.export_root  # shared plates folder
     plate_dir.mkdir(parents=True, exist_ok=True)
-    render_dir.mkdir(parents=True, exist_ok=True)
     ensure_within(plate_dir, [settings.roots.export_root])
     # Base name only — MC's export preset appends its own extension.
     return PrepareResponse(job_id=job_id, export_dir=str(plate_dir), reference_name="ref")
@@ -254,13 +255,14 @@ def send(req: SendRequest) -> JobView:
     job = Job(job_id=job_id, project_mode=req.project_mode)
     store.add(job)
 
-    # One folder per shot with PLATE + RENDER subfolders.
-    job_root = settings.roots.export_root / job_id
-    plate_dir = job_root / "PLATE"
-    render_dir = job_root / "RENDER"
+    # Flat layout: shared plates folder + shared render folder; files by shot.
+    safe_name = "".join(c if c.isalnum() or c in "-_. " else "_" for c in shot["shot_name"]).strip() or "shot"
+    plate_dir = settings.roots.export_root
+    render_dir = settings.roots.watch_root
     plate_dir.mkdir(parents=True, exist_ok=True)
     render_dir.mkdir(parents=True, exist_ok=True)
-    job.watch_dir = render_dir  # AE renders here; the watcher scans it
+    job.watch_dir = render_dir       # AE renders here (shared)
+    job.render_stem = safe_name      # the watcher matches renders by this name
 
     # Reference: the panel exported it via MCAPI (validate under export_root),
     # else fall back to a generated placeholder plate (dev / no real export).
@@ -277,7 +279,7 @@ def send(req: SendRequest) -> JobView:
                 f"(expected {claimed.name} or another movie file)",
             )
     else:
-        ref_path = plate_dir / "ref.mov"
+        ref_path = plate_dir / f"{safe_name}.mov"
         ensure_within(ref_path, [settings.roots.export_root])
         mcapi.export_reference(str(ref_path), req.handles)
         if not (ref_path.exists() and ref_path.stat().st_size > 0):
@@ -307,8 +309,7 @@ def send(req: SendRequest) -> JobView:
         created=datetime.now(timezone.utc).isoformat(),
     )
 
-    # Render output goes into the RENDER subfolder, named after the shot.
-    safe_name = "".join(c if c.isalnum() or c in "-_. " else "_" for c in shot["shot_name"]).strip() or "shot"
+    # Render output goes into the shared render folder, named after the shot.
     render_output = str(render_dir / f"{safe_name}.mov")
 
     aep_path, jsx_path = ae.prepare_comp(
@@ -323,7 +324,7 @@ def send(req: SendRequest) -> JobView:
     )
     sidecar.aep_path = str(aep_path)
 
-    sidecar_path = plate_dir / "shot.json"
+    sidecar_path = plate_dir / f"{safe_name}.json"
     sidecar_path.write_text(json.dumps(sidecar.model_dump(by_alias=True), indent=2))
 
     job.reference_path = ref_path
@@ -414,7 +415,7 @@ def mark_imported(job_id: str, req: ImportRequest) -> JobView:
     if job.return_path is None:
         raise HTTPException(status_code=409, detail="no return detected yet")
     try:
-        ensure_within(job.return_path, [settings.roots.export_root])
+        ensure_within(job.return_path, [settings.roots.watch_root])
     except PathNotAllowed as e:
         raise HTTPException(status_code=400, detail=str(e))
     job.return_bin = req.target_bin or _default_return_bin(job)
