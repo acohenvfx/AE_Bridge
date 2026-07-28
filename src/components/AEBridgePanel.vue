@@ -379,7 +379,22 @@ export default {
           // apply the user's prefix/suffix to the plate name (not the Avid clip)
           const named = (this.s.prefix || '') + grabbed.shot.shot_name + (this.s.suffix || '')
           grabbed.shot.shot_name = named
-          // 2. reserve a <date>_<shot> folder (PLATE/RENDER) from the helper
+          // warn if a plate with this name already exists (they can add a prefix/suffix)
+          try {
+            const chk = await api.plateExists(named)
+            if (chk.exists) {
+              const ok = window.confirm(
+                'A plate named "' + named + '" already exists in the plates folder:\n\n' +
+                (chk.files || []).join('\n') +
+                '\n\nOverwrite it?\n(Cancel to add a name prefix/suffix, then Send again.)'
+              )
+              if (!ok) {
+                this.s.message = 'Cancelled — add a prefix/suffix to rename, then Send again.'
+                return
+              }
+            }
+          } catch (e) { /* if the check fails, proceed */ }
+          // 2. reserve the job + shared plates folder
           this.s.message = 'Preparing…'
           const prep = await api.prepare(named)
           // 3. export the plate into the PLATE folder

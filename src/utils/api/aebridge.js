@@ -31,6 +31,8 @@ export const parseEdl = (edlPath, recIn, recOut, fps) =>
     fps: fps || 24
   })
 
+export const plateExists = (name) =>
+  getJSON('/v1/aebridge/plate-exists?name=' + encodeURIComponent(name || ''))
 export const prepare = (name) => postJSON('/v1/aebridge/prepare', { name: name || null })
 export const send = (payload) => postJSON('/v1/aebridge/send', payload)
 export const swap = (jobId) => postJSON(`/v1/aebridge/return/${jobId}/swap`)

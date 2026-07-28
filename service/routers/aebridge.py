@@ -194,6 +194,25 @@ def _sanitize(name: Optional[str]) -> str:
     return s.strip("_.") or "shot"
 
 
+def _safe_filename(name: Optional[str]) -> str:
+    return "".join(c if c.isalnum() or c in "-_. " else "_" for c in (name or "").strip()) or "shot"
+
+
+@router.get("/plate-exists")
+def plate_exists(name: str = "") -> dict:
+    """Does a plate with this shot name already exist in the plates folder?
+    The panel uses this to warn before overwriting."""
+    stem = _safe_filename(name)
+    root = settings.roots.export_root
+    matches = []
+    if root.exists():
+        matches = [
+            p.name for p in root.glob("*")
+            if p.is_file() and p.suffix.lower() in _MEDIA_EXTS and (p.stem == stem or p.stem.startswith(stem))
+        ]
+    return {"exists": bool(matches), "name": stem, "files": matches}
+
+
 @router.post("/prepare", response_model=PrepareResponse)
 def prepare(req: Optional[PrepareRequest] = None) -> PrepareResponse:
     """Reserve a job. Flat layout: all plates go in the shared `plates` folder and
@@ -256,7 +275,7 @@ def send(req: SendRequest) -> JobView:
     store.add(job)
 
     # Flat layout: shared plates folder + shared render folder; files by shot.
-    safe_name = "".join(c if c.isalnum() or c in "-_. " else "_" for c in shot["shot_name"]).strip() or "shot"
+    safe_name = _safe_filename(shot["shot_name"]).strip() or "shot"
     plate_dir = settings.roots.export_root
     render_dir = settings.roots.watch_root
     plate_dir.mkdir(parents=True, exist_ok=True)
