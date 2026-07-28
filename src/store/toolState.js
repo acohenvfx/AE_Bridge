@@ -21,5 +21,21 @@ export const aebridge = Vue.observable({
   exportSetting: '',
   destBin: 'AEBridge_Temps',
   sending: false,
-  message: ''
+  message: '',
+  // --- plate stack (multi-pass grab) ---
+  // `stack` is the PLAN read from the timeline (every video track carrying a
+  // clip under the playhead). `grabbed` is what has actually been subclipped so
+  // far — one entry per pass, because only the track enable state isolates a
+  // track and it isolates exactly one per grab.
+  stack: [],
+  stackTC: '',
+  grabbed: [],
+  baseName: '',
+  stackShot: null,
+  analyzing: false,
+  grabbingTrack: null,
+  autoGrab: false,
+  // The log is a diagnostic surface, not part of the normal flow — collapsed by
+  // default, and the choice is remembered.
+  logOpen: false
 })

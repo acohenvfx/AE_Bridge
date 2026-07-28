@@ -97,7 +97,50 @@ def test_existing_project_via_picked_token():
             },
         )
         assert r.status_code == 200, r.text
-        assert r.json()["aep_path"] == str(picked)
+        assert r.json()["aep_path"] == str(picked.resolve())
+
+
+def test_multi_plate_send():
+    _seed_template()
+    with TestClient(app) as c:
+        # Panel exported two plates (V1 base + V2 layer) into the plates folder.
+        settings.roots.export_root.mkdir(parents=True, exist_ok=True)
+        base = settings.roots.export_root / "SHOT_010.mov"
+        top = settings.roots.export_root / "SHOT_010_pl02.mov"
+        base.write_bytes(b"PLATE1")
+        top.write_bytes(b"PLATE2")
+        r = c.post(
+            "/v1/aebridge/send",
+            json={
+                "template_id": "__blank__",
+                "shot": {"shot_name": "SHOT_010"},
+                "reference_path": str(base),
+                "plates": [
+                    {"name": "SHOT_010", "file": str(base), "track": 1, "order": 1, "offset_frames": 0},
+                    {"name": "SHOT_010_pl02", "file": str(top), "track": 2, "order": 2, "offset_frames": -8},
+                ],
+            },
+        )
+        assert r.status_code == 200, r.text
+        job = r.json()
+        # Sidecar records the stack; the build script gets both plates.
+        import json as _json
+        sc = _json.loads(Path(job["sidecar_path"]).read_text())
+        assert [p["name"] for p in sc["plates"]] == ["SHOT_010", "SHOT_010_pl02"]
+        assert sc["plates"][1]["offset_frames"] == -8
+        jsx = (Path(job["aep_path"]).parent / "build.jsx").read_text()
+        assert "SHOT_010_pl02" in jsx
+
+        # A plate outside export_root must be rejected.
+        r = c.post(
+            "/v1/aebridge/send",
+            json={
+                "template_id": "__blank__",
+                "shot": {"shot_name": "SHOT_011"},
+                "plates": [{"name": "evil", "file": "/etc/passwd", "track": 1, "order": 1}],
+            },
+        )
+        assert r.status_code == 400
 
 
 def test_path_escape_rejected():
@@ -124,5 +167,6 @@ if __name__ == "__main__":
     test_new_per_shot_roundtrip()
     test_existing_project_requires_token()
     test_existing_project_via_picked_token()
+    test_multi_plate_send()
     test_path_escape_rejected()
     print("ALL SMOKE TESTS PASSED")

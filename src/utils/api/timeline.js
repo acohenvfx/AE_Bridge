@@ -32,6 +32,8 @@ import {
   GetListOfExportSettingsRequestBody,
   GetMarkersRequest,
   GetMarkersRequestBody,
+  GetListOfCommandsRequest,
+  GetListOfCommandsRequestBody,
   SetMobInfoRequest,
   SetMobInfoRequestBody,
   ColumnInfo,
@@ -314,6 +316,15 @@ export function videoTracks(tracks) {
     .sort((a, b) => a.number - b.number)
 }
 
+// Video tracks that are ENABLED — strictly, not "enabled or selected". This is
+// the state `enabled_tracks_only` exports from, so it is what decides whether a
+// track is soloed for a clean plate grab.
+export function enabledVideoTracks(tracks) {
+  return (tracks || [])
+    .filter((t) => t.type === TRACKTYPE_PICTURE && t.enabled && t.numSegments > 0)
+    .sort((a, b) => a.number - b.number)
+}
+
 // Run ExportEDL for one track; returns the EDL file path MC wrote.
 export async function exportEdlForTrack(mobId, track) {
   const client = requireClient()
@@ -329,7 +340,12 @@ export async function exportEdlForTrack(mobId, track) {
   req.setBody(body)
   const res = await callUnary(client, 'exportEDL', req, getAccessTokenMetadata(), 120000)
   const b = res && res.getBody ? res.getBody() : null
-  return b && b.getPath ? String(b.getPath() || '').trim() : ''
+  const path = b && b.getPath ? String(b.getPath() || '').trim() : ''
+  // Log the path per track: if MC reuses ONE path for every track, a read can
+  // race/return the previous track's EDL — which would silently break any
+  // per-track reasoning built on it.
+  logMcapiVerbose('exportEDL path V' + track.number, path)
+  return path
 }
 
 // From parsed EDL clips, find the one whose record span contains the playhead.
@@ -426,84 +442,160 @@ async function extendWithHandles({ mobId, binPath, handles }) {
   return { items: [], head: 0, end: 0 }
 }
 
-// ALWAYS grab from V1 (picture track number 1) and find the clip under the
-// playhead via V1's EDL. Avid can only isolate a track on export via
-// enabled_tracks_only, so V1 must be enabled. Returns { track, target, fps }.
-async function chooseV1AndTarget({ sequenceMobId, playheadTC, parseEdl }) {
+// Find the clip under the playhead on ONE video track, via that track's own EDL
+// (ExportEDL honors track_list — confirmed). Avid can only isolate a track on
+// export via enabled_tracks_only, so the track must be enabled.
+// Returns { track, target, fps, allTracks }.
+async function chooseTrackAndTarget({ sequenceMobId, playheadTC, parseEdl, trackNumber = 1 }) {
   const allTracks = await getMobTrackInfo(sequenceMobId)
   logMcapiVerbose('track info', allTracks)
-  const track = allTracks.find((t) => t.type === TRACKTYPE_PICTURE && t.number === 1)
-  if (!track) throw new Error('No V1 (video track 1) on this sequence')
-  if (!track.numSegments) throw new Error('V1 has no clips')
-  if (!track.enabled) throw new Error('Enable V1 before Send (turn on the V1 track). Avid only exports ENABLED tracks.')
-  logMcapiVerbose('chosen V1 track (hardwired to V1)', { chosen: track })
+  const label = 'V' + trackNumber
+  const track = allTracks.find((t) => t.type === TRACKTYPE_PICTURE && t.number === trackNumber)
+  if (!track) throw new Error('No ' + label + ' (video track ' + trackNumber + ') on this sequence')
+  if (!track.numSegments) throw new Error(label + ' has no clips')
+  if (!track.enabled) throw new Error('Enable ' + label + ' before grabbing (turn on the ' + label + ' track). Avid only exports ENABLED tracks.')
+  logMcapiVerbose('chosen track', { chosen: track })
   const fps = 24
 
   const edlPath = await exportEdlForTrack(sequenceMobId, track)
   const clips = (edlPath && parseEdl) ? await parseEdl(edlPath) : []
-  logMcapiVerbose('V1 EDL clips', { count: clips.length, clips: clips.map((c) => ({ n: c.clip_name, in: c.rec_in, out: c.rec_out })) })
+  logMcapiVerbose(label + ' EDL clips', { count: clips.length, numSegments: track.numSegments, clips: clips.map((c) => ({ n: c.clip_name, in: c.rec_in, out: c.rec_out })) })
   const target = findClipAtPlayhead(clips, playheadTC, fps)
   if (!target) {
-    throw new Error('No V1 clip under the playhead (' + playheadTC + '). Park on the shot before Send.')
+    throw new Error('No ' + label + ' clip under the playhead (' + playheadTC + '). Park on the shot first.')
   }
   logMcapiVerbose('playhead clip', { playheadTC, clip: target.clip_name, rec_in: target.rec_in, rec_out: target.rec_out, src_in: target.src_in, src_out: target.src_out })
-  return { track, target, fps }
+  return { track, target, fps, allTracks }
 }
 
-async function grabSourceHandledMob({ sequenceMobId, playheadTC, playheadFrame, parseEdl, destBinPath, handles, scratchBin = 'AEBridge_Scratch' }) {
+// Enumerate the plate stack under the playhead: every video track carrying a
+// clip there, bottom (V1) first. This is the grab PLAN — run it once while the
+// tracks are in their normal (all-enabled) state, then grab each plate in its
+// own pass. Per-track enumeration is reliable because ExportEDL honors
+// track_list; per-track media export is not, which is why passes exist.
+export async function analyzeStack({ parseEdl }) {
+  const shot = await getCurrentShot()
+  const allTracks = await getMobTrackInfo(shot.mobId)
+  const fps = 24
+  const vids = allTracks
+    .filter((t) => t.type === TRACKTYPE_PICTURE && t.numSegments > 0)
+    .sort((a, b) => a.number - b.number)
+  const stack = []
+  for (const t of vids) {
+    try {
+      const p = await exportEdlForTrack(shot.mobId, t)
+      const clips = (p && parseEdl) ? await parseEdl(p) : []
+      const c = findClipAtPlayhead(clips, shot.playheadTC, fps)
+      logMcapiVerbose('stack scan V' + t.number, c
+        ? { clip: c.clip_name, span: c.rec_in + ' → ' + c.rec_out, enabled: t.enabled }
+        : { empty: true, enabled: t.enabled })
+      if (c) {
+        stack.push({
+          track: t.number,
+          enabled: t.enabled,
+          clipName: c.clip_name,
+          recIn: c.rec_in,
+          recOut: c.rec_out,
+        })
+      }
+    } catch (e) {
+      logMcapiVerbose('stack scan V' + t.number + ' failed', e.message)
+    }
+  }
+  logMcapiVerbose('stack at playhead', { playheadTC: shot.playheadTC, tracks: stack.map((s) => 'V' + s.track) })
+  return { shot, stack }
+}
+
+async function grabSourceHandledMob({ sequenceMobId, playheadTC, playheadFrame, parseEdl, destBinPath, handles, trackNumber = 1, scratchBin = 'AEBridge_Scratch' }) {
   await ensureBin(destBinPath)
   const destPath = await resolveBinPath(destBinPath)
   await ensureBin(scratchBin)
   const scratchPath = await resolveBinPath(scratchBin)
-  const { track, target, fps } = await chooseV1AndTarget({ sequenceMobId, playheadTC, parseEdl })
+  const { track, target, fps, allTracks } = await chooseTrackAndTarget({ sequenceMobId, playheadTC, parseEdl, trackNumber })
   const wantTrack = 'V' + track.number
 
-  // Step 1 — isolate the target track's clip under the playhead the way EB's
-  // SubclipIt does: CreateSubClip with useClipBounds + head_frame (the playhead
-  // frame) and enabled_tracks_only=TRUE. track_list is NOT honored by
-  // CreateSubClip, so enabled_tracks_only is the only thing that keeps other
-  // tracks out of the export. MC fans one subclip per enabled track; we keep the
-  // one that is EXACTLY the target track (single video track — no composite).
+  // ISOLATION GUARD. CreateSubClip does NOT fan one subclip per enabled track
+  // (verified in Avid 2026-07-28): with V1+V2 enabled it returns ONE subclip of
+  // the enabled COMPOSITE, labelled with the bottom track — its `Tracks` column
+  // reads exactly "V1" while the media is V2 over V1. The columns lie, so track
+  // classification cannot be trusted. The enable state is the only isolation
+  // lever: exactly one video track may carry a clip under the playhead, or what
+  // we export is a flatten. Check each other enabled video track's own EDL
+  // (ExportEDL *does* honor track_list) for a clip at the playhead.
+  const conflicts = []
+  for (const t of allTracks) {
+    if (t.type !== TRACKTYPE_PICTURE || t.number === track.number) continue
+    if (!t.enabled || !t.numSegments) continue
+    try {
+      const p = await exportEdlForTrack(sequenceMobId, t)
+      const cl = (p && parseEdl) ? await parseEdl(p) : []
+      const c = findClipAtPlayhead(cl, playheadTC, fps)
+      // numSegments tells us how many clips this track really has. If the EDL
+      // came back with a wildly different count, ExportEDL did NOT isolate the
+      // track (or we read a stale file) and this check cannot be trusted.
+      logMcapiVerbose('isolation check V' + t.number, {
+        edlClips: cl.length,
+        numSegments: t.numSegments,
+        countMatches: cl.length === t.numSegments,
+        clipAtPlayhead: c ? c.clip_name : null,
+        span: c ? c.rec_in + ' → ' + c.rec_out : null,
+      })
+      if (c) conflicts.push('V' + t.number)
+    } catch (e) {
+      // Can't prove it's empty there — treat as a conflict rather than risk a flatten.
+      logMcapiVerbose('isolation check V' + t.number + ' FAILED (treating as conflict)', e.message)
+      conflicts.push('V' + t.number)
+    }
+  }
+  if (conflicts.length) {
+    throw new Error(
+      'Enable ONLY ' + wantTrack + ' to grab this plate — ' + conflicts.join(', ') +
+      ' also has a clip under the playhead, and Avid would export ' + wantTrack +
+      ' flattened with it. Disable ' + conflicts.join(', ') + ', then grab again ' +
+      '(each track is grabbed in its own pass).'
+    )
+  }
+
+  // Step 1 — subclip the clip under the playhead with useClipBounds +
+  // head_frame and enabled_tracks_only=TRUE (track_list is NOT honored by
+  // CreateSubClip; enabled_tracks_only is the only isolation lever). Past the
+  // guard above, exactly one video track carries the shot, so this yields the
+  // isolated plate. The loop below is kept because MC can still return more
+  // than one subclip (e.g. one per source clip); a stack is built by grabbing
+  // each track in its own pass, not from this call.
   const headFrame = Number.isInteger(playheadFrame) ? playheadFrame : tcToFrames(playheadTC, fps)
-  logMcapiVerbose('grab step1 (' + wantTrack + '-only, enabledTracksOnly)', { headFrame, clip: target.clip_name })
+  logMcapiVerbose('grab step1 (isolated by enable state)', { headFrame, clip: target.clip_name })
   const aItems = await createRawSubclip({
     mobId: sequenceMobId, binPath: scratchPath, useMarks: false, useClipBounds: true,
     enabledTracksOnly: true, headFrame, endFrame: headFrame + 1,
   })
   if (!aItems.length) throw new Error('grab step 1 made no subclip for the playhead clip')
 
-  // Keep the subclip that is EXACTLY the target track (single video track). A
-  // subclip whose Tracks spans the target + another video track is a flattened
-  // composite (a lower enabled track merged in) — surface that instead of
-  // silently exporting a flatten.
+  // Past the guard exactly one video track is enabled over the shot, so every
+  // subclip here is that track's. Still prefer an exactly-single-video-track
+  // one: a multi-track `Tracks` value would mean the guard was evaded.
   const videoTokens = (cols) => String(pick(cols, ['Tracks']) || '').match(/V\d+/g) || []
-  const isExactlyTarget = (cols) => { const v = videoTokens(cols); return v.length === 1 && v[0] === wantTrack }
   let a = null
   let aCols = null
-  let sawTargetComposite = false
   for (const item of aItems) {
     const cols = await getMobColumns(item.mobId).catch(() => ({}))
-    const toks = videoTokens(cols)
     logMcapiVerbose('step1 candidate', { name: item.mobName, tracks: pick(cols, ['Tracks']) })
-    if (isExactlyTarget(cols)) { a = item; aCols = cols; break }
-    if (toks.includes(wantTrack)) sawTargetComposite = true
+    if (videoTokens(cols).length === 1) { a = item; aCols = cols; break }
   }
   if (!a) {
-    if (sawTargetComposite) {
-      throw new Error(wantTrack + ' came back flattened with another video track. Disable the other enabled video track(s) so only ' + wantTrack + ' (the plate) is on, then Send again.')
-    }
-    throw new Error('No ' + wantTrack + '-only subclip was produced. Make sure the plate is the clip under the playhead and its track is enabled.')
+    throw new Error('No single-track subclip was produced for ' + wantTrack +
+      '. Enable ONLY ' + wantTrack + ' over this shot and grab again.')
   }
-  const aDur = durFrames(aCols, fps)
-  logMcapiVerbose('source-handle step1 (scratch subclip of source)', { mob: a, start: pick(aCols, ['Start']), end: pick(aCols, ['End']), dur: aDur, tracks: pick(aCols, ['Tracks']) })
+  logMcapiVerbose('grab step1 (scratch subclip)', { mob: a, start: pick(aCols, ['Start']), end: pick(aCols, ['End']), dur: durFrames(aCols, fps), tracks: pick(aCols, ['Tracks']) })
 
-  // Step 2: extend it by handles into the working bin.
+  // Step 2 — extend by handles into the working bin, with the START+END
+  // position sanity check; on mismatch fall back to the exact (no-handle)
+  // scratch subclip, whose range is guaranteed correct.
   const { items: bItems, head, end } = await extendWithHandles({ mobId: a.mobId, binPath: destPath, handles })
-
-  // Sanity-check the START + END positions, not just duration: the handled
-  // subclip must be [aStart - head, aEnd + end]. If the position is off (some
-  // clips extend to the wrong part of the source), discard it and export the
-  // exact marked-range subclip (step 1) directly — guaranteed-correct range.
+  let exportMob = a
+  let created = [a]
+  let headH = 0
+  let endH = 0
   if (bItems.length) {
     const bCols = await getMobColumns(bItems[0].mobId).catch(() => ({}))
     const aStart = tcToFrames(pick(aCols, ['Start']), fps)
@@ -517,15 +609,19 @@ async function grabSourceHandledMob({ sequenceMobId, playheadTC, playheadFrame, 
       bStart: pick(bCols, ['Start']), bEnd: pick(bCols, ['End']),
       head, end, startOk, endOk,
     })
-    if (!(startOk && endOk)) {
-      logMcapiVerbose('handled subclip wrong range — exporting exact marked range (no handles)', {})
-      return { exportMob: a, created: aItems, headHandles: 0, endHandles: 0, target, track }
+    if (startOk && endOk) {
+      exportMob = bItems[0]
+      created = bItems
+      headH = head
+      endH = end
+    } else {
+      logMcapiVerbose('handled subclip wrong range — using exact (no handles)', {})
     }
+  } else {
+    throw new Error('source-handle step 2 produced no subclip in ' + destPath)
   }
 
-  if (!bItems.length) throw new Error('source-handle step 2 produced no subclip in ' + destPath)
-  logMcapiVerbose('source-handle step2 (in working bin)', { mob: bItems[0], head, end })
-  return { exportMob: bItems[0], created: bItems, headHandles: head, endHandles: end, target, track }
+  return { exportMob, created, headHandles: headH, endHandles: endH, target, track, fps }
 }
 
 // --- export settings + export ---------------------------------------------
@@ -634,31 +730,36 @@ export async function importReturn({ filePath, destBinPath, importSettingsName =
 }
 
 // --- orchestrator ----------------------------------------------------------
-// Grab the marked shot (subclip + rename), return { shot, exportMobId } WITHOUT
-// exporting — so the caller can name the export folder after the shot first.
-export async function grabShot({ destBinPath, handles = 0, parseEdl = null }) {
+// Grab ONE plate — the clip under the playhead on `trackNumber` — as a subclip
+// with source handles, renamed. Returns { shot, exportMobId, plate } WITHOUT
+// exporting, so the caller can name the export after the shot first.
+//
+// A stacked shot is grabbed one track per call (only the enable state isolates
+// a track), each call requiring that track to be the only enabled video track
+// over the shot. `baseName` carries V1's marker name to the upper passes so
+// every plate in a stack shares one base.
+export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trackNumber = 1, baseName = '' }) {
   const shot = await getCurrentShot()
-  // Grab the V1 clip under the playhead from its SOURCE master (handles from the
+  // Grab the clip under the playhead from its SOURCE master (handles from the
   // source's own media, never the sequence timeline).
-  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, playheadTC: shot.playheadTC, playheadFrame: shot.playheadFrame, parseEdl, destBinPath, handles })
+  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, playheadTC: shot.playheadTC, playheadFrame: shot.playheadFrame, parseEdl, destBinPath, handles, trackNumber })
   const sequence = r.exportMob
   const created = r.created
 
-  // Prefer the timeline marker comment as the shot name. The marker lives on the
-  // SEQUENCE (a master-clip subclip does not carry it), so read the sequence
-  // markers and keep the one inside this shot's record span; fall back to any
-  // marker the exported subclip happens to retain.
-  let name = sequence.mobName || shot.name
+  // Read the marker for THIS pass's clip on THIS track. Markers live on the
+  // SEQUENCE (a master-clip subclip does not carry them), so read the
+  // sequence's, restricted to the grabbed track and this clip's record span.
+  // Every pass does this — each track in a stack can carry its own marker.
+  let marker = ''
   try {
-    let label = ''
     const t = r.target
     if (t) {
       const seqStartF = tcToFrames(shot.startTC || '00:00:00:00', 24)
       const inF = tcToFrames(t.rec_in, 24) - seqStartF
       const outF = tcToFrames(t.rec_out, 24) - seqStartF
-      // Restrict to markers on the grabbed track (V1) — server-side filter, plus
-      // a client-side guard in case the server ignores it — so a clip stacked
-      // under V2+ still takes V1's marker comment, not the higher track's.
+      // Restrict to markers on the grabbed track — server-side filter plus a
+      // client-side guard in case the server ignores it — so each plate in a
+      // stack takes its OWN track's comment, not a neighbour's.
       const wantT = r.track ? r.track.type : null
       const wantN = r.track ? r.track.number : null
       const all = await getMarkers(shot.mobId, r.track || undefined)
@@ -673,19 +774,27 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null }) {
       const chosen = (phF != null && within.length > 1)
         ? [within.slice().sort((a, b) => Math.abs((a.offset || 0) - phF) - Math.abs((b.offset || 0) - phF))[0]]
         : within
-      label = markerLabel(chosen)
-      logMcapiVerbose('marker in shot span', { inF, outF, playheadFrame: phF, track: wantN != null ? 'V' + wantN : null, count: within.length, label })
+      marker = markerLabel(chosen)
+      logMcapiVerbose('marker for V' + trackNumber, { inF, outF, playheadFrame: phF, count: within.length, marker })
     }
-    if (!label) label = markerLabel(await getMarkers(sequence.mobId).catch(() => []))
-    if (label) {
-      for (const item of created) {
-        await renameMob(item.mobId, label).catch((e) => logMcapiVerbose('rename failed', { id: item.mobId, err: e.message }))
-      }
-      name = label
-    }
+    // Fall back to any marker the subclip itself retained.
+    if (!marker) marker = markerLabel(await getMarkers(sequence.mobId).catch(() => []))
   } catch (e) {
     logMcapiVerbose('marker read failed', e.message)
   }
+
+  // Naming. The first pass (V1) names the whole stack from its marker. An upper
+  // track prefers its OWN marker; `_plNN` is only the fallback for a track that
+  // has no marker of its own.
+  const name = baseName || marker || sequence.mobName || shot.name
+  const plateName = trackNumber === 1
+    ? name
+    : (marker || name + '_pl' + String(trackNumber).padStart(2, '0'))
+  logMcapiVerbose('plate name', { track: 'V' + trackNumber, marker: marker || null, base: name, plateName, fromMarker: !!(trackNumber !== 1 && marker) })
+  for (const item of created) {
+    await renameMob(item.mobId, plateName).catch((e) => logMcapiVerbose('rename failed', { id: item.mobId, err: e.message }))
+  }
+  logMcapiVerbose('grabbed plate', { track: 'V' + trackNumber, name: plateName, recIn: r.target && r.target.rec_in, head: r.headHandles, end: r.endHandles })
 
   const subCols = await getMobColumns(sequence.mobId).catch(() => ({}))
   const startTC = pick(subCols, ['Start', 'Mark IN'])
@@ -701,6 +810,17 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null }) {
   return {
     exportMobId: sequence.mobId,
     createdMobIds: created.map((i) => i.mobId),
+    // This pass's plate. The caller collects one per track, then computes AE
+    // layer offsets across the collected set (see plateOffsets).
+    plate: {
+      track: trackNumber,
+      mobId: sequence.mobId,
+      name: plateName,
+      rec_in: (r.target && r.target.rec_in) || '',
+      rec_out: (r.target && r.target.rec_out) || '',
+      head_handles: r.headHandles,
+      end_handles: r.endHandles,
+    },
     shot: {
       shot_name: name,
       sequence_name: shot.name,
@@ -713,6 +833,58 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null }) {
       frame_count: frameCount,
     },
   }
+}
+
+// AE layer alignment across a collected stack. Comp time 0 = the start of the
+// BASE plate's file (its rec_in minus its head handles); every other plate's
+// file starts at its own rec_in minus its own head handles, so the layer offset
+// is the difference. Plates are ordered bottom (lowest track) first.
+// Pure function — unit-testable without Avid.
+export function plateOffsets(plates, fps = 24) {
+  const sorted = (plates || []).slice().sort((a, b) => a.track - b.track)
+  if (!sorted.length) return []
+  const base = sorted[0]
+  const baseStart = tcToFrames(base.rec_in || '', fps) - (base.head_handles || 0)
+  return sorted.map((p, i) => ({
+    ...p,
+    order: i + 1,
+    offset_frames: p.rec_in
+      ? (tcToFrames(p.rec_in, fps) - (p.head_handles || 0)) - baseStart
+      : 0,
+  }))
+}
+
+// --- command probe ---------------------------------------------------------
+// Enumerate the Avid commands this panel is allowed to drive.
+//
+// This previously failed with code=7 (access denied) and was written off as
+// "DoCommand is denied for panels". But the RPC carries its own API scope,
+// `avid.mediacomposer.command`, which the manifest did not declare. With the
+// scope added, this call decides it: a list means the panel can drive Avid
+// commands (and we look for track-selector ones to automate the stack grab);
+// another code=7 means it really is off-limits.
+//
+// NOTE the generated getter is `getCommandid`, not `getCommandId`.
+export async function probeCommands() {
+  const client = requireClient()
+  const req = new GetListOfCommandsRequest()
+  req.setBody(new GetListOfCommandsRequestBody())
+  const res = await callUnary(client, 'getListOfCommands', req, getAccessTokenMetadata())
+  const b = res && res.getBody ? res.getBody() : null
+  const list = b && b.getCommandsList ? b.getCommandsList() : []
+  const cmds = list.map((c) => ({
+    name: c.getName ? c.getName() : '',
+    id: c.getCommandid ? c.getCommandid() : null,
+    category: c.getCategory ? c.getCategory() : '',
+  }))
+  // Surface anything that looks like it could toggle a track, since that is
+  // the whole reason for the probe.
+  const trackish = cmds.filter((c) =>
+    /track|video|select|enable|solo|v\d/i.test(c.name + ' ' + c.category))
+  logMcapiVerbose('commands: total', cmds.length)
+  logMcapiVerbose('commands: categories', Array.from(new Set(cmds.map((c) => c.category))).join(', '))
+  logMcapiVerbose('commands: track-related', trackish)
+  return { commands: cmds, trackRelated: trackish }
 }
 
 // Export the grabbed shot to `exportDir`, named after the shot. Returns the path.

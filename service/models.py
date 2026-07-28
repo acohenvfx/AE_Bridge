@@ -43,6 +43,16 @@ class ClientShot(BaseModel):
     frame_count: int = 0
 
 
+class PlateRef(BaseModel):
+    """One plate in a shot's vertical stack (V1 base + tracks above)."""
+
+    name: str
+    file: str
+    track: int = 1
+    order: int = 1  # 1 = bottom (V1) .. N = top
+    offset_frames: int = 0  # AE layer start relative to the V1 plate file
+
+
 class SendRequest(BaseModel):
     template_id: str
     handles: int = Field(0, ge=0, le=120)
@@ -55,6 +65,8 @@ class SendRequest(BaseModel):
     job_id: Optional[str] = None
     shot: Optional[ClientShot] = None
     reference_path: Optional[str] = None
+    # Multi-plate stack (V1 first). When absent, reference_path alone is used.
+    plates: Optional[list[PlateRef]] = None
 
 
 class PrepareRequest(BaseModel):
@@ -123,6 +135,7 @@ class Sidecar(BaseModel):
     project_mode: ProjectMode
     aep_path: str
     aep_comp_name: str
+    plates: list[PlateRef] = []
     version: int = 1
     created: str
 

@@ -82,6 +82,7 @@ from ..models import (
     ParseEdlRequest,
     ParseEdlResponse,
     PickProjectResponse,
+    PlateRef,
     PrepareRequest,
     PrepareResponse,
     ProjectMode,
@@ -283,9 +284,26 @@ def send(req: SendRequest) -> JobView:
     job.watch_dir = render_dir       # AE renders here (shared)
     job.render_stem = safe_name      # the watcher matches renders by this name
 
+    # Plate stack: every plate file must live under export_root and be fully
+    # written (size-stable) before AE touches it. V1 (order 1) is the base.
+    plates = []
+    if req.plates:
+        for p in sorted(req.plates, key=lambda x: x.order):
+            try:
+                claimed = ensure_within(p.file, [settings.roots.export_root])
+            except PathNotAllowed as e:
+                raise HTTPException(status_code=400, detail=f"plate outside export root: {e}")
+            resolved = _resolve_exported_reference(claimed, plate_dir)
+            if resolved is None:
+                raise HTTPException(status_code=400, detail=f"plate not found in {plate_dir}: {claimed.name}")
+            plates.append(PlateRef(name=p.name, file=str(resolved), track=p.track,
+                                   order=p.order, offset_frames=p.offset_frames))
+
     # Reference: the panel exported it via MCAPI (validate under export_root),
     # else fall back to a generated placeholder plate (dev / no real export).
-    if req.reference_path:
+    if plates:
+        ref_path = Path(plates[0].file)
+    elif req.reference_path:
         try:
             claimed = ensure_within(req.reference_path, [settings.roots.export_root])
         except PathNotAllowed as e:
@@ -325,6 +343,7 @@ def send(req: SendRequest) -> JobView:
         project_mode=req.project_mode,
         aep_path="",  # filled after comp build
         aep_comp_name=f"{shot['shot_name']}_temp",
+        plates=plates,
         created=datetime.now(timezone.utc).isoformat(),
     )
 

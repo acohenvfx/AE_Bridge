@@ -34,7 +34,15 @@ const manifest = {
   displayName: 'AEBridge',
   description:
     'One-click round-trip between Avid Media Composer and After Effects for temp titles, graphics, and quick element comps.',
-  usesApi: ['avid.mediacomposer.general', 'avid.mediacomposer.timelineEditing'],
+  // 'command' scope covers GetListOfCommands / DoCommand / IsCommandsEnabled.
+  // These returned code=7 (access denied) before the scope was declared here —
+  // if they now work, the panel can drive track enable itself and the
+  // multi-pass stack grab collapses into one button.
+  usesApi: [
+    'avid.mediacomposer.general',
+    'avid.mediacomposer.timelineEditing',
+    'avid.mediacomposer.command',
+  ],
   subscribesToChannels: [],
   entitlements: [],
   companyPrefix: 'acohenvfx',

@@ -1,5 +1,23 @@
 # Phase: Multi-plate / multi-track
 
+> **2026-07-28 status — the one-call plate stack is REFUTED in Avid.**
+> There is no per-track fan: with V1+V2 enabled, `CreateSubClip` +
+> `enabled_tracks_only` returns ONE subclip of the **composite**, labelled `V1`,
+> and exporting it gives V2's picture. The `Tracks` column cannot be trusted.
+> See the corrected fact in `HANDOFF.md`. All mechanics below that assume
+> `CreateSubClip(track_list=…)` or a per-track fan are **obsolete**.
+>
+> - **Vertical (stack at the playhead)** — BUILT as a **guided multi-pass grab**
+>   (UI `.9`, pending Avid verification). Only the enable state isolates, and it
+>   isolates one track per grab, so the panel enumerates the stack
+>   (`analyzeStack`), then walks the user one track per pass ("enable only V2 →
+>   Grab V2"), refusing any grab that would flatten. Send ships the collected
+>   `plates[]` and AE builds the layered comp. Note the panel can READ track
+>   enable state (`getMobTrackInfo`) but cannot set it — hence the manual step.
+> - **Horizontal (marked range → one temp per V1 clip)** — NOT built; the
+>   marked-range derivation below must be rebuilt on the playhead-based
+>   pipeline and verified in Avid.
+
 ## Goal
 
 A VFX temp shot often isn't a single flat image, and a marked range often spans
@@ -84,8 +102,10 @@ track. So to limit enumeration to the marked range we derive it indirectly:
 Trade-off: step 1 creates scratch subclips (put them in a dedicated scratch bin,
 clean up after). Name matching needs a source-TC tiebreaker for duplicate names.
 
-Status: **4a enumeration works** (parse + multi-track table). The marked-range
-filter above is the next build step (needs Avid verification of name/TC match).
+Status: superseded by the playhead pivot — the 4a "Analyze" table and
+`getMarkedTrackClips`/`deriveMarkedRange` were removed with the sequence-grab
+path. Marked-range (horizontal) batching will need this derivation rebuilt on
+the current playhead-based pipeline.
 
 ## Unknowns to verify in Avid (4a)
 

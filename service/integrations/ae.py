@@ -142,40 +142,51 @@ _JSX_TEMPLATE = r"""
         var dur = (P.frame_count && fps) ? (P.frame_count / fps) : 4;
         var comp = proj.items.addComp(P.comp_name, P.width, P.height, 1.0, dur, fps);
 
+        // Plate stack: index 0 = V1 base (sizes the comp), the rest layer on
+        // top in order. layers.add puts each new layer on top, so iterating
+        // bottom->top gives the correct stacking.
+        var plates = (P.plates && P.plates.length)
+            ? P.plates
+            : (P.reference ? [{ file: P.reference, name: P.shot_name, offset_frames: 0 }] : []);
         var addedPlate = false;
-        var reason = "no reference path";
-        if (P.reference) {
-            var rf = new File(P.reference);
-            if (!rf.exists) {
-                reason = "file not found: " + P.reference;
-            } else {
-                try {
-                    var io = new ImportOptions(rf);
-                    if (io.canImportAs && io.canImportAs(ImportAsType.FOOTAGE)) {
-                        io.importAs = ImportAsType.FOOTAGE;
-                    }
-                    var foot = proj.importFile(io);
-                    var l = comp.layers.add(foot);
-                    l.name = "PLATE - " + P.shot_name;
-                    // Size the comp to the actual plate length (frame_count from
-                    // Avid columns is unreliable); AE knows the real duration.
+        var failures = plates.length ? [] : ["no reference path"];
+        for (var i = 0; i < plates.length; i++) {
+            var pl = plates[i];
+            var rf = new File(pl.file);
+            if (!rf.exists) { failures.push(pl.name + ": file not found: " + pl.file); continue; }
+            try {
+                var io = new ImportOptions(rf);
+                if (io.canImportAs && io.canImportAs(ImportAsType.FOOTAGE)) {
+                    io.importAs = ImportAsType.FOOTAGE;
+                }
+                var foot = proj.importFile(io);
+                var l = comp.layers.add(foot);
+                l.name = (i === 0 ? "PLATE - " : "") + pl.name;
+                l.startTime = (pl.offset_frames || 0) / fps;
+                if (i === 0) {
+                    // Size the comp to the actual base plate length (frame_count
+                    // from Avid columns is unreliable); AE knows the real duration.
                     try {
-                        if (foot.duration && foot.duration > 0) {
-                            comp.duration = foot.duration;
-                            l.startTime = 0;
-                        }
+                        if (foot.duration && foot.duration > 0) comp.duration = foot.duration;
                     } catch (e) {}
                     addedPlate = true;
-                } catch (e) {
-                    reason = "import error: " + e.toString() + " | " + P.reference;
                 }
+            } catch (e) {
+                failures.push(pl.name + ": import error: " + e.toString() + " | " + pl.file);
             }
+        }
+        if (addedPlate && failures.length) {
+            // Base is in but an upper plate failed — surface it in the comp.
+            try {
+                var warn = comp.layers.addText("AEBridge: plate import failed\n" + failures.join("\n"));
+                warn.property("Transform").property("Position").setValue([P.width / 2, P.height * 0.9]);
+            } catch (e) {}
         }
 
         if (!addedPlate) {
             // Import failed — show WHY so we can diagnose from the AE viewer.
             var bg = comp.layers.addSolid([0.10, 0.14, 0.22], "PLATE PLACEHOLDER - " + P.shot_name, P.width, P.height, 1.0);
-            var tl = comp.layers.addText(P.label_text + "\n" + reason);
+            var tl = comp.layers.addText(P.label_text + "\n" + failures.join("\n"));
             try {
                 var td = tl.property("Source Text").value;
                 td.resetCharStyle();
@@ -251,6 +262,10 @@ def prepare_comp(
         "frame_rate": sidecar.frame_rate,
         "frame_count": sidecar.frame_count,
         "reference": str(reference_mov) if has_ref else "",
+        "plates": [
+            {"file": p.file, "name": p.name, "offset_frames": p.offset_frames, "track": p.track}
+            for p in sidecar.plates
+        ],
         "render_output": render_output or "",
     }
     jsx = _JSX_TEMPLATE % {"params": json.dumps(params)}
