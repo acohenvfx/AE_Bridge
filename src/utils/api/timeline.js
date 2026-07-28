@@ -302,6 +302,7 @@ export async function getMobTrackInfo(mobId) {
       number: label && label.getNumber ? label.getNumber() : 0,
       enabled: ti.getEnabled ? Boolean(ti.getEnabled()) : false,
       selected: ti.getSelected ? Boolean(ti.getSelected()) : false,
+      monitored: ti.getMonitored ? Boolean(ti.getMonitored()) : false,
       numSegments: ti.getNumSegments ? ti.getNumSegments() : 0,
     }
   })
@@ -344,7 +345,7 @@ export function findClipAtPlayhead(clips, playheadTC, fps = 24) {
 // One CreateSubClip; returns the new SUBCLIP items (via SUBCLIPS-flag diff).
 // Pass headTimecode/endTimecode (record TC) to target a specific clip span, or
 // useMarks for the marked range.
-async function createRawSubclip({ mobId, binPath, useMarks, useClipBounds, trackList, addFramesHead = 0, addFramesEnd = 0, headTimecode, endTimecode }) {
+async function createRawSubclip({ mobId, binPath, useMarks, useClipBounds, trackList, addFramesHead = 0, addFramesEnd = 0, headTimecode, endTimecode, headFrame, endFrame, enabledTracksOnly = false }) {
   const client = requireClient()
   const F = GetListOfBinItemsRequestBody.BinItemFlags
   const before = new Set(F ? (await listBinItems(binPath, [F.SUBCLIPS]).catch(() => [])).map((i) => i.mobId) : [])
@@ -354,12 +355,18 @@ async function createRawSubclip({ mobId, binPath, useMarks, useClipBounds, track
   body.setMobId(mobId)
   body.setUseMarksBounds(!!useMarks)
   body.setUseClipBounds(!!useClipBounds)
-  body.setHeadFrame(-1)
-  body.setEndFrame(-1)
-  if (headTimecode) body.setHeadTimecode(headTimecode)
-  if (endTimecode) body.setEndTimecode(endTimecode)
+  // Prefer frame offsets when given (the SubclipIt method); else fall back to
+  // record timecodes; else -1/-1 (whole clip via useClipBounds).
+  const useFrames = Number.isInteger(headFrame)
+  body.setHeadFrame(useFrames ? headFrame : -1)
+  body.setEndFrame(Number.isInteger(endFrame) ? endFrame : (useFrames ? headFrame + 1 : -1))
+  if (!useFrames && headTimecode) body.setHeadTimecode(headTimecode)
+  if (!useFrames && endTimecode) body.setEndTimecode(endTimecode)
   body.setCreateNewSequence(false)
-  body.setEnabledTracksOnly(false)
+  // enabled_tracks_only is the ONLY thing that actually isolates a track on
+  // export — track_list is not honored by CreateSubClip (it fans/uses all
+  // tracks). With this false, V2+ gets flattened into the export.
+  body.setEnabledTracksOnly(!!enabledTracksOnly)
   body.setRetainMarkers(true)
   body.setAddFramesAtHead(Math.max(0, addFramesHead || 0))
   body.setAddFramesAtEnd(Math.max(0, addFramesEnd || 0))
@@ -419,38 +426,76 @@ async function extendWithHandles({ mobId, binPath, handles }) {
   return { items: [], head: 0, end: 0 }
 }
 
-async function grabSourceHandledMob({ sequenceMobId, playheadTC, parseEdl, destBinPath, handles, scratchBin = 'AEBridge_Scratch' }) {
-  await ensureBin(destBinPath)
-  const destPath = await resolveBinPath(destBinPath)
-  await ensureBin(scratchBin)
-  const scratchPath = await resolveBinPath(scratchBin)
-  const vids = videoTracks(await getMobTrackInfo(sequenceMobId))
-  if (!vids.length) throw new Error('No enabled video track for source-handle grab')
-  const v1 = vids[0]
+// ALWAYS grab from V1 (picture track number 1) and find the clip under the
+// playhead via V1's EDL. Avid can only isolate a track on export via
+// enabled_tracks_only, so V1 must be enabled. Returns { track, target, fps }.
+async function chooseV1AndTarget({ sequenceMobId, playheadTC, parseEdl }) {
+  const allTracks = await getMobTrackInfo(sequenceMobId)
+  logMcapiVerbose('track info', allTracks)
+  const track = allTracks.find((t) => t.type === TRACKTYPE_PICTURE && t.number === 1)
+  if (!track) throw new Error('No V1 (video track 1) on this sequence')
+  if (!track.numSegments) throw new Error('V1 has no clips')
+  if (!track.enabled) throw new Error('Enable V1 before Send (turn on the V1 track). Avid only exports ENABLED tracks.')
+  logMcapiVerbose('chosen V1 track (hardwired to V1)', { chosen: track })
   const fps = 24
 
-  // Find the V1 clip under the playhead (via the V1 EDL) — this is THE shot,
-  // regardless of how wide the marked range is.
-  const edlPath = await exportEdlForTrack(sequenceMobId, v1)
+  const edlPath = await exportEdlForTrack(sequenceMobId, track)
   const clips = (edlPath && parseEdl) ? await parseEdl(edlPath) : []
+  logMcapiVerbose('V1 EDL clips', { count: clips.length, clips: clips.map((c) => ({ n: c.clip_name, in: c.rec_in, out: c.rec_out })) })
   const target = findClipAtPlayhead(clips, playheadTC, fps)
   if (!target) {
     throw new Error('No V1 clip under the playhead (' + playheadTC + '). Park on the shot before Send.')
   }
-  logMcapiVerbose('playhead clip', { playheadTC, clip: target.clip_name, rec_in: target.rec_in, rec_out: target.rec_out })
+  logMcapiVerbose('playhead clip', { playheadTC, clip: target.clip_name, rec_in: target.rec_in, rec_out: target.rec_out, src_in: target.src_in, src_out: target.src_out })
+  return { track, target, fps }
+}
 
-  // Step 1: subclip exactly that clip's record span → source-master subclip in
-  // scratch (head_timecode/end_timecode instead of the marks).
+async function grabSourceHandledMob({ sequenceMobId, playheadTC, playheadFrame, parseEdl, destBinPath, handles, scratchBin = 'AEBridge_Scratch' }) {
+  await ensureBin(destBinPath)
+  const destPath = await resolveBinPath(destBinPath)
+  await ensureBin(scratchBin)
+  const scratchPath = await resolveBinPath(scratchBin)
+  const { track, target, fps } = await chooseV1AndTarget({ sequenceMobId, playheadTC, parseEdl })
+  const wantTrack = 'V' + track.number
+
+  // Step 1 — isolate the target track's clip under the playhead the way EB's
+  // SubclipIt does: CreateSubClip with useClipBounds + head_frame (the playhead
+  // frame) and enabled_tracks_only=TRUE. track_list is NOT honored by
+  // CreateSubClip, so enabled_tracks_only is the only thing that keeps other
+  // tracks out of the export. MC fans one subclip per enabled track; we keep the
+  // one that is EXACTLY the target track (single video track — no composite).
+  const headFrame = Number.isInteger(playheadFrame) ? playheadFrame : tcToFrames(playheadTC, fps)
+  logMcapiVerbose('grab step1 (' + wantTrack + '-only, enabledTracksOnly)', { headFrame, clip: target.clip_name })
   const aItems = await createRawSubclip({
-    mobId: sequenceMobId, binPath: scratchPath, useMarks: false, useClipBounds: false,
-    trackList: [{ type: v1.type, number: v1.number }],
-    headTimecode: target.rec_in, endTimecode: target.rec_out,
+    mobId: sequenceMobId, binPath: scratchPath, useMarks: false, useClipBounds: true,
+    enabledTracksOnly: true, headFrame, endFrame: headFrame + 1,
   })
-  if (!aItems.length) throw new Error('source-handle step 1 made no subclip for the playhead clip')
-  const a = aItems[0]
-  const aCols = await getMobColumns(a.mobId).catch(() => ({}))
+  if (!aItems.length) throw new Error('grab step 1 made no subclip for the playhead clip')
+
+  // Keep the subclip that is EXACTLY the target track (single video track). A
+  // subclip whose Tracks spans the target + another video track is a flattened
+  // composite (a lower enabled track merged in) — surface that instead of
+  // silently exporting a flatten.
+  const videoTokens = (cols) => String(pick(cols, ['Tracks']) || '').match(/V\d+/g) || []
+  const isExactlyTarget = (cols) => { const v = videoTokens(cols); return v.length === 1 && v[0] === wantTrack }
+  let a = null
+  let aCols = null
+  let sawTargetComposite = false
+  for (const item of aItems) {
+    const cols = await getMobColumns(item.mobId).catch(() => ({}))
+    const toks = videoTokens(cols)
+    logMcapiVerbose('step1 candidate', { name: item.mobName, tracks: pick(cols, ['Tracks']) })
+    if (isExactlyTarget(cols)) { a = item; aCols = cols; break }
+    if (toks.includes(wantTrack)) sawTargetComposite = true
+  }
+  if (!a) {
+    if (sawTargetComposite) {
+      throw new Error(wantTrack + ' came back flattened with another video track. Disable the other enabled video track(s) so only ' + wantTrack + ' (the plate) is on, then Send again.')
+    }
+    throw new Error('No ' + wantTrack + '-only subclip was produced. Make sure the plate is the clip under the playhead and its track is enabled.')
+  }
   const aDur = durFrames(aCols, fps)
-  logMcapiVerbose('source-handle step1 (scratch subclip of source)', { mob: a, start: pick(aCols, ['Start']), end: pick(aCols, ['End']), dur: aDur })
+  logMcapiVerbose('source-handle step1 (scratch subclip of source)', { mob: a, start: pick(aCols, ['Start']), end: pick(aCols, ['End']), dur: aDur, tracks: pick(aCols, ['Tracks']) })
 
   // Step 2: extend it by handles into the working bin.
   const { items: bItems, head, end } = await extendWithHandles({ mobId: a.mobId, binPath: destPath, handles })
@@ -474,13 +519,13 @@ async function grabSourceHandledMob({ sequenceMobId, playheadTC, parseEdl, destB
     })
     if (!(startOk && endOk)) {
       logMcapiVerbose('handled subclip wrong range — exporting exact marked range (no handles)', {})
-      return { exportMob: a, created: aItems, headHandles: 0, endHandles: 0 }
+      return { exportMob: a, created: aItems, headHandles: 0, endHandles: 0, target, track }
     }
   }
 
   if (!bItems.length) throw new Error('source-handle step 2 produced no subclip in ' + destPath)
   logMcapiVerbose('source-handle step2 (in working bin)', { mob: bItems[0], head, end })
-  return { exportMob: bItems[0], created: bItems, headHandles: head, endHandles: end }
+  return { exportMob: bItems[0], created: bItems, headHandles: head, endHandles: end, target, track }
 }
 
 // --- export settings + export ---------------------------------------------
@@ -516,21 +561,34 @@ export async function exportMob({ mobId, outputPath, exportSettingsName = '' }) 
 }
 
 // --- markers ---------------------------------------------------------------
-// Read markers on a mob (the subclip retains them). Returns [{name, comment, offset}].
-export async function getMarkers(mobId) {
+// Read markers on a mob. Pass `track` ({type, number}) to restrict to markers
+// on that track only (used so a stacked shot takes V1's marker, not V2's).
+// Returns [{name, comment, offset, trackType, trackNumber}].
+export async function getMarkers(mobId, track) {
   const client = requireClient()
   const req = new GetMarkersRequest()
   const body = new GetMarkersRequestBody()
   body.setMobId(mobId)
+  if (track && body.setTrack) {
+    const lbl = new TrackLabel()
+    lbl.setType(track.type)
+    lbl.setNumber(track.number)
+    body.setTrack(lbl)
+  }
   req.setBody(body)
   const res = await callUnary(client, 'getMarkers', req, getAccessTokenMetadata())
   const b = res && res.getBody ? res.getBody() : null
   const infos = b && b.getInfoList ? b.getInfoList() : []
-  const out = infos.map((i) => ({
-    name: i.getName ? i.getName() : '',
-    comment: i.getComment ? i.getComment() : '',
-    offset: i.getOffset ? i.getOffset() : 0,
-  }))
+  const out = infos.map((i) => {
+    const tl = i.getTrackLabel ? i.getTrackLabel() : null
+    return {
+      name: i.getName ? i.getName() : '',
+      comment: i.getComment ? i.getComment() : '',
+      offset: i.getOffset ? i.getOffset() : 0,
+      trackType: tl && tl.getType ? tl.getType() : null,
+      trackNumber: tl && tl.getNumber ? tl.getNumber() : null,
+    }
+  })
   logMcapiVerbose('markers', out)
   return out
 }
@@ -582,14 +640,43 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null }) {
   const shot = await getCurrentShot()
   // Grab the V1 clip under the playhead from its SOURCE master (handles from the
   // source's own media, never the sequence timeline).
-  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, playheadTC: shot.playheadTC, parseEdl, destBinPath, handles })
+  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, playheadTC: shot.playheadTC, playheadFrame: shot.playheadFrame, parseEdl, destBinPath, handles })
   const sequence = r.exportMob
   const created = r.created
 
-  // Prefer the marker comment as the shot name; rename the sequence + subclip(s).
+  // Prefer the timeline marker comment as the shot name. The marker lives on the
+  // SEQUENCE (a master-clip subclip does not carry it), so read the sequence
+  // markers and keep the one inside this shot's record span; fall back to any
+  // marker the exported subclip happens to retain.
   let name = sequence.mobName || shot.name
   try {
-    const label = markerLabel(await getMarkers(sequence.mobId))
+    let label = ''
+    const t = r.target
+    if (t) {
+      const seqStartF = tcToFrames(shot.startTC || '00:00:00:00', 24)
+      const inF = tcToFrames(t.rec_in, 24) - seqStartF
+      const outF = tcToFrames(t.rec_out, 24) - seqStartF
+      // Restrict to markers on the grabbed track (V1) — server-side filter, plus
+      // a client-side guard in case the server ignores it — so a clip stacked
+      // under V2+ still takes V1's marker comment, not the higher track's.
+      const wantT = r.track ? r.track.type : null
+      const wantN = r.track ? r.track.number : null
+      const all = await getMarkers(shot.mobId, r.track || undefined)
+      const within = all.filter((m) => {
+        const inSpan = (m.offset || 0) >= inF - 2 && (m.offset || 0) < outF + 2
+        const onTrack = wantN == null || m.trackNumber == null || (m.trackType === wantT && m.trackNumber === wantN)
+        return inSpan && onTrack
+      })
+      // Multiple markers can sit in one clip's span — prefer the one nearest the
+      // playhead (that's the shot the editor parked on), not the earliest.
+      const phF = Number.isInteger(shot.playheadFrame) ? shot.playheadFrame : null
+      const chosen = (phF != null && within.length > 1)
+        ? [within.slice().sort((a, b) => Math.abs((a.offset || 0) - phF) - Math.abs((b.offset || 0) - phF))[0]]
+        : within
+      label = markerLabel(chosen)
+      logMcapiVerbose('marker in shot span', { inF, outF, playheadFrame: phF, track: wantN != null ? 'V' + wantN : null, count: within.length, label })
+    }
+    if (!label) label = markerLabel(await getMarkers(sequence.mobId).catch(() => []))
     if (label) {
       for (const item of created) {
         await renameMob(item.mobId, label).catch((e) => logMcapiVerbose('rename failed', { id: item.mobId, err: e.message }))

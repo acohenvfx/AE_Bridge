@@ -12,6 +12,7 @@
         </p>
       </div>
       <div class="eb-tool-head-r">
+        <div class="eb-env-pill" :title="'UI build ' + uiBuild">UI {{ uiBuild }}</div>
         <div class="eb-env-pill" :class="{ 'is-bad': !s.helper.online }">
           <span class="eb-env-dot" :class="{ 'is-bad': !s.helper.online }"></span>
           {{ s.helper.online ? 'helper v' + s.helper.version : 'helper offline' }}
@@ -176,12 +177,16 @@
 import { aebridge as state } from '~/store/toolState'
 import * as api from '~/utils/api/aebridge'
 import * as tl from '~/utils/api/timeline'
-import { getMcapiLog, clearMcapiLog } from '~/utils/api/mcapi'
+import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
+
+// Bump this on every UI change so you can tell at a glance which build is loaded
+// (shown as a pill in the header + printed to the log on load).
+const UI_BUILD = '2026-07-28.5 · V1 grab + V1 marker'
 
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, picking: false, reading: false, importingId: null, logEntries: [], copied: false, _timer: null, _shotTimer: null, _logTimer: null }
+    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, _timer: null, _shotTimer: null, _logTimer: null }
   },
   computed: {
     logText() {
@@ -189,6 +194,7 @@ export default {
     }
   },
   async mounted() {
+    logMcapiVerbose('UI build', { build: UI_BUILD })
     this.restorePrefs()
     this.s.inAvid = tl.mcapiAvailable()
     await this.refreshVersion()
