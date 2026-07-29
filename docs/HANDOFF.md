@@ -232,7 +232,7 @@ what is under the playhead, without grabbing anything.
 - **UI build stamp:** `UI_BUILD` const in `AEBridgePanel.vue` renders as a header
   pill and logs on load. **Bump it on every UI change** so the user can tell
   which build the Avid WebView has cached (the WebView caches aggressively;
-  reopen the panel to force a fresh bundle). Current: `2026-07-29.17`.
+  reopen the panel to force a fresh bundle). Current: `2026-07-29.18`.
 - Project persistence (remembers last `.aep` across panel reloads AND helper
   restarts, re-registering the path for a fresh token).
 

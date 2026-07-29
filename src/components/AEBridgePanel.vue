@@ -2,14 +2,13 @@
   <div class="eb-tool">
     <div class="eb-tool-head">
       <div class="eb-tool-head-l">
-        <div class="eb-tool-eyebrow">
-          <span class="dot" aria-hidden="true"></span>
-          BRIDGE · AVID ↔ AFTER EFFECTS
+        <!-- App name only. EB house style: display face, second word in the
+             brand hue. Uses the shared .eb-brand-* classes from style.scss (EB
+             puts them in its sidebar; this panel has no sidebar, so the lockup
+             sits in the tool head instead). -->
+        <div class="eb-brand eb-brand--inline">
+          <h1 class="eb-brand-title">AE <b>Bridge</b></h1>
         </div>
-        <h2 class="eb-tool-title">Round-trip a shot to After Effects</h2>
-        <p class="eb-tool-sub">
-          Send the selected shot out with the plate pre-loaded; get the render back and cut it in.
-        </p>
       </div>
       <div class="eb-tool-head-r">
         <button
@@ -447,7 +446,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-07-29.17 · range stacks restored'
+const UI_BUILD = '2026-07-29.18 · AE Bridge lockup'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -1399,6 +1398,40 @@ export default {
 .plate-name.is-preview { color: var(--muted); font-style: italic; }
 .plate-done { display: flex; align-items: center; gap: 8px; }
 .job.is-orphan { border-color: var(--bad); }
+/* The shared head styles assume a three-line eyebrow/title/sub on the left and
+   a stacked status column on the right. With only the app name on the left, a
+   four-row pill stack made the two sides badly lopsided — so the status items
+   run as a single wrapping row and both sides sit on one baseline. */
+.eb-tool-head { align-items: center; }
+.eb-tool-head-r {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* .eb-brand is written for EB's sidebar (centred, padded, bottom border).
+   Inside the tool head it needs to be a bare left-aligned lockup. */
+.eb-brand--inline {
+  padding: 0;
+  border-bottom: 0;
+  text-align: left;
+  margin: 0;
+}
+.eb-brand--inline .eb-brand-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  /* The panel gets docked narrow in Avid; the name must never break across
+     two lines. The status pills wrap instead. */
+  white-space: nowrap;
+}
+.eb-tool-head-l { flex: none; }
+
 .name-affix { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .name-affix .eb-input { flex: 1; min-width: 0; }
 .shot-group { display: flex; flex-direction: column; gap: 4px; }
