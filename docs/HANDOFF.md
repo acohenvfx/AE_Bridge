@@ -358,11 +358,11 @@ MCAPI has **no push events**, so the shot readout must poll — and each tick is
 - **Never backs off** while auto-grab is on or a grab/send is in flight.
 - **Pause updates** chip stops it outright (remembered); Refresh still works.
 
-## Marked range → many shots (UI `2026-07-29.11`)
+## Marked range → many shots (VERIFIED in Avid 2026-07-29)
 
 A marked range spanning several shots becomes one comp/job **per V1 clip**,
-each with its own vertical plate stack. Enumeration is VERIFIED in Avid; the
-grab and send across a range are written but UNRUN.
+each with its own vertical plate stack. Enumeration, per-track batch grab and
+the N-job fan-out are all confirmed working.
 
 - **`analyzeRange()`** reads `Mark IN`/`Mark OUT` from the sequence's mob
   columns (see the marks fact above), runs each video track's EDL **once**, and
