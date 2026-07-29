@@ -164,6 +164,10 @@ class JobView(BaseModel):
     job_id: str
     state: JobState
     project_mode: ProjectMode
+    # The shot this job is for. The panel groups jobs and render files by it,
+    # so the editor sees shots rather than two parallel lists of internals.
+    shot_name: Optional[str] = None
+    render_stem: Optional[str] = None
     reference_path: Optional[str] = None
     sidecar_path: Optional[str] = None
     aep_path: Optional[str] = None

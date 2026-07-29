@@ -12,6 +12,11 @@
         </p>
       </div>
       <div class="eb-tool-head-r">
+        <button
+          class="eb-btn eb-btn--ghost eb-btn--mini"
+          title="Drop every job whatever its state. Files on disk are untouched, and renders you already imported stay imported."
+          @click="doHardReset"
+        >Reset</button>
         <div class="eb-env-pill" :title="'UI build ' + uiBuild">UI {{ uiBuild }}</div>
         <div class="eb-env-pill" :class="{ 'is-bad': !s.helper.online }">
           <span class="eb-env-dot" :class="{ 'is-bad': !s.helper.online }"></span>
@@ -33,15 +38,8 @@
       <div class="eb-section">
         <div class="eb-section-head">
           <h3 class="eb-section-title">Current shot</h3>
-          <label
-            class="eb-chip"
-            :class="{ 'is-on': s.pollPaused }"
-            title="Stop the panel polling Media Composer for the playhead position. Refresh still works."
-          >
-            <input v-model="s.pollPaused" type="checkbox" style="margin-right:6px"> Pause updates
-          </label>
-          <!-- The readout refreshes itself, so no Refresh button — except while
-               paused, when it is the only way to update. -->
+          <!-- The readout refreshes itself; Pause lives in Diagnostics. Refresh
+               only appears while paused, when it is the only way to update. -->
           <button v-if="s.pollPaused" class="eb-btn eb-btn--ghost eb-btn--mini" :disabled="reading" @click="readShot">
             {{ reading ? 'Reading…' : 'Refresh' }}
           </button>
@@ -59,6 +57,9 @@
         <div class="eb-muted" style="font-size:11.5px">
           Park the playhead on the shot, then Analyze to see which tracks carry picture there.
         </div>
+        <div v-if="s.pollPaused" class="eb-muted" style="font-size:11px">
+          Updates paused (Diagnostics) — use Refresh.
+        </div>
       </div>
 
       <div v-if="s.inAvid" class="eb-section">
@@ -68,6 +69,12 @@
             <button class="eb-btn eb-btn--ghost eb-btn--mini" :disabled="s.analyzing" @click="doAnalyze">
               {{ s.analyzing ? 'Analyzing…' : 'Analyze stack' }}
             </button>
+            <button
+              class="eb-btn eb-btn--ghost eb-btn--mini"
+              :disabled="s.rangeAnalyzing"
+              title="Use the sequence's IN/OUT marks: one shot per V1 clip in the range, each with its own plate stack"
+              @click="doAnalyzeRange"
+            >{{ s.rangeAnalyzing ? 'Reading range…' : 'Analyze range' }}</button>
             <label v-if="s.stack.length" class="eb-chip" :class="{ 'is-on': s.autoGrab }" :title="'Grab each plate automatically as you solo its track in the Avid timeline'">
               <input v-model="s.autoGrab" type="checkbox" style="margin-right:6px"> Auto-grab
             </label>
@@ -80,14 +87,76 @@
           </div>
         </div>
 
+        <!-- Marked-range plan. Read-only for now: grabbing across the range is
+             the next step, so this exists to verify the enumeration first. -->
+        <div v-if="s.range" class="eb-callout" style="margin-bottom:10px">
+          <div style="display:flex; align-items:baseline; justify-content:space-between; gap:10px">
+            <b>{{ s.range.shots.length }} shot{{ s.range.shots.length === 1 ? '' : 's' }} in
+              <span class="eb-mono">{{ s.range.markIn }}–{{ s.range.markOut }}</span></b>
+            <button class="eb-btn eb-btn--ghost eb-btn--mini" @click="s.range = null">Hide</button>
+          </div>
+          <div class="range-shots">
+            <div v-for="(sh, i) in s.range.shots" :key="sh.atTC" class="range-shot">
+              <span class="eb-muted eb-mono" style="font-size:11px">{{ i + 1 }}</span>
+              <div style="min-width:0; flex:1">
+                <div class="eb-mono" style="font-size:12px; overflow-wrap:anywhere">
+                  {{ sh.baseName ? withAffixes(sh.baseName) : sh.clipName }}
+                </div>
+                <div class="eb-muted" style="font-size:11px">{{ sh.recIn }}–{{ sh.recOut }}</div>
+              </div>
+              <span class="eb-mono" style="font-size:11px; white-space:nowrap">
+                <span
+                  v-for="p in sh.stack"
+                  :key="p.track"
+                  :class="(sh.grabbed || []).some(g => g.track === p.track) ? 'c-ok' : 'eb-muted'"
+                >V{{ p.track }} </span>
+              </span>
+            </div>
+          </div>
+          <div class="eb-actions" style="margin-top:10px">
+            <button
+              v-if="rangeTracksRemaining().length"
+              class="eb-btn eb-btn--primary eb-btn--mini"
+              :disabled="s.grabbingTrack !== null"
+              @click="doGrabTrackAcrossRange(rangeTracksRemaining()[0])"
+            >{{ s.grabbingTrack !== null
+                ? 'Grabbing V' + s.grabbingTrack + '…'
+                : 'Grab V' + rangeTracksRemaining()[0] + ' for all shots' }}</button>
+            <button
+              v-if="rangeReadyCount"
+              class="eb-btn eb-btn--primary eb-btn--mini"
+              :disabled="s.sending"
+              @click="doSendRange"
+            >{{ s.sending ? 'Sending…' : 'Send ' + rangeReadyCount + ' shot' + (rangeReadyCount === 1 ? '' : 's') }}</button>
+          </div>
+          <div class="eb-muted" style="font-size:11px; margin-top:8px">
+            <template v-if="rangeTracksRemaining().length">
+              {{ s.range.totalPlates }} plates. Solo <b>only V{{ rangeTracksRemaining()[0] }}</b>
+              in the timeline, then grab it for every shot at once — soloing is per track,
+              not per shot.
+            </template>
+            <template v-else>
+              All {{ s.range.totalPlates }} plates grabbed. Send makes one job per shot.
+            </template>
+          </div>
+        </div>
+
         <div v-if="!s.stack.length" class="eb-muted">
           Analyze reads each video track's EDL to find every clip under the playhead.
+          Analyze range does the same across your IN/OUT marks.
         </div>
         <div v-else>
           <div class="eb-muted" style="font-size:11.5px; margin-bottom:8px">
             {{ s.stack.length }} plate{{ s.stack.length === 1 ? '' : 's' }} at
             <span class="eb-mono">{{ s.stackTC }}</span>.
             Avid can only export one video track at a time, so each plate is grabbed in its own pass.
+          </div>
+          <!-- Naming lives with the names it changes: the plate rows below
+               update live as these are typed. -->
+          <div class="name-affix">
+            <input v-model="s.prefix" class="eb-input" placeholder="prefix" aria-label="Plate name prefix" />
+            <span class="eb-muted eb-mono" style="font-size:11.5px; white-space:nowrap">shot name</span>
+            <input v-model="s.suffix" class="eb-input" placeholder="suffix" aria-label="Plate name suffix" />
           </div>
           <div class="plates">
             <div v-for="p in s.stack" :key="p.track" class="plate" :class="{ 'is-done': isGrabbed(p.track), 'is-next': nextTrack === p.track }">
@@ -139,70 +208,6 @@
         </div>
       </div>
 
-      <div class="eb-section">
-        <div class="eb-grid cols-2">
-          <!-- Template picker is hidden while __blank__ is the only option;
-               s.templateId still flows to /send. It reappears if real
-               templates ever land in template_root. -->
-          <div v-if="s.templates.length > 1" class="eb-field">
-            <label class="eb-label">Template</label>
-            <select v-model="s.templateId" class="eb-select">
-              <option v-for="t in s.templates" :key="t.id" :value="t.id">{{ t.label }}</option>
-            </select>
-          </div>
-          <div class="eb-field">
-            <label class="eb-label">Handles</label>
-            <input v-model.number="s.handles" type="number" min="0" max="120" class="eb-input" />
-          </div>
-        </div>
-
-
-        <div class="eb-grid cols-2">
-          <div class="eb-field">
-            <label class="eb-label">Name prefix</label>
-            <input v-model="s.prefix" class="eb-input" placeholder="(optional)" />
-          </div>
-          <div class="eb-field">
-            <label class="eb-label">Name suffix</label>
-            <input v-model="s.suffix" class="eb-input" placeholder="(optional)" />
-          </div>
-        </div>
-        <div v-if="s.prefix || s.suffix" class="eb-muted" style="font-size:11.5px">
-          Plate name → <span class="eb-mono">{{ s.prefix }}&lt;shot&gt;{{ s.suffix }}</span>
-        </div>
-
-        <div v-if="s.inAvid" class="eb-field">
-          <label class="eb-label">Export setting (QuickTime)</label>
-          <select v-model="s.exportSetting" class="eb-select">
-            <option value="">(default / current)</option>
-            <option v-for="name in s.exportSettings" :key="name" :value="name">{{ name }}</option>
-          </select>
-        </div>
-
-        <div class="eb-field">
-          <label class="eb-label">Project mode</label>
-          <div class="eb-tabs">
-            <button
-              class="eb-tab"
-              :class="{ active: s.projectMode === 'new_per_shot' }"
-              @click="setMode('new_per_shot')"
-            >New project per shot</button>
-            <button
-              class="eb-tab"
-              :class="{ active: s.projectMode === 'existing_project' }"
-              @click="setMode('existing_project')"
-            >Add to a project…</button>
-          </div>
-        </div>
-
-        <div class="eb-actions">
-          <button class="eb-btn eb-btn--ghost eb-btn--mini" :disabled="picking" @click="choose">
-            {{ picking ? 'Choosing…' : (s.projectMode === 'new_per_shot' ? 'Name / place new project…' : 'Choose .aep…') }}
-          </button>
-          <span class="eb-mono eb-muted">{{ s.projectLabel || (s.projectMode === 'new_per_shot' ? 'auto (default location)' : 'no project chosen') }}</span>
-        </div>
-      </div>
-
       <div class="eb-actions">
         <button class="eb-btn eb-btn--primary eb-btn--wide" :disabled="s.sending || !canSend" @click="doSend">
           {{ s.sending ? 'Sending…' : sendLabel }}
@@ -210,86 +215,169 @@
         <span class="eb-muted">{{ s.message }}</span>
       </div>
 
+      <!-- Set-once preferences. Collapsed by default: these are project or
+           facility defaults, not per-shot decisions. -->
       <div class="eb-section">
         <div class="eb-section-head">
-          <h3 class="eb-section-title">Jobs</h3>
-          <button
-            v-if="s.jobs.length"
-            class="eb-btn eb-btn--ghost eb-btn--mini"
-            @click="doClearJobs"
-          >Clear finished</button>
-          <button
-            class="eb-btn eb-btn--ghost eb-btn--mini"
-            title="Drop every job whatever its state and forget which renders were imported. Files on disk are untouched."
-            @click="doHardReset"
-          >Hard reset</button>
+          <button class="log-toggle" :aria-expanded="String(s.settingsOpen)" @click="s.settingsOpen = !s.settingsOpen">
+            <span class="log-caret" :class="{ 'is-open': s.settingsOpen }">›</span>
+            <h3 class="eb-section-title" style="margin:0">Settings</h3>
+            <span class="eb-muted" style="font-size:11px">{{ settingsSummary }}</span>
+          </button>
         </div>
-        <div v-if="!s.jobs.length" class="eb-muted">No jobs yet.</div>
-        <div v-else class="jobs">
-          <div v-for="j in s.jobs" :key="j.job_id" class="job" :class="{ 'is-orphan': j.plates_missing && j.plates_missing.length }">
-            <div>
-              <div class="eb-mono job-name">{{ j.job_id }}</div>
-              <div class="job-state">{{ stateLabel(j.state) }}</div>
-              <div v-if="j.plates_missing && j.plates_missing.length" class="c-bad" style="font-size:11px">
-                plate deleted: {{ j.plates_missing.join(', ') }}
-              </div>
+        <div v-if="s.settingsOpen">
+          <div class="eb-grid cols-2">
+            <!-- Template picker is hidden while __blank__ is the only option;
+                 s.templateId still flows to /send. It reappears if real
+                 templates ever land in template_root. -->
+            <div v-if="s.templates.length > 1" class="eb-field">
+              <label class="eb-label">Template</label>
+              <select v-model="s.templateId" class="eb-select">
+                <option v-for="t in s.templates" :key="t.id" :value="t.id">{{ t.label }}</option>
+              </select>
             </div>
-            <button
-              v-if="j.plates_missing && j.plates_missing.length"
-              class="eb-btn eb-btn--ghost eb-btn--mini"
-              title="This job's plate is gone from the plates folder, so it can never be re-rendered"
-              @click="doRemoveJob(j)"
-            >Remove</button>
-            <button
-              v-else-if="j.state === 'returned'"
-              class="eb-btn eb-btn--primary eb-btn--mini"
-              :disabled="importingId === j.job_id"
-              @click="doImport(j)"
-            >{{ importingId === j.job_id ? 'Importing…' : 'Import to Avid' }}</button>
-            <span v-else-if="j.state === 'done'" class="eb-stat"><b>imported</b></span>
-            <span v-else-if="j.state === 'ready_in_ae'" class="eb-stat"><b>awaiting render</b></span>
-            <span v-else class="eb-stat">
-              <b>{{ j.project_mode === 'existing_project' ? 'shared' : 'per-shot' }}</b>
-            </span>
+            <div class="eb-field">
+              <label class="eb-label">Handles</label>
+              <input v-model.number="s.handles" type="number" min="0" max="120" class="eb-input" />
+            </div>
+          </div>
+
+          <div v-if="s.inAvid" class="eb-field">
+            <label class="eb-label">Export setting (QuickTime)</label>
+            <select v-model="s.exportSetting" class="eb-select">
+              <option value="">(default / current)</option>
+              <option v-for="name in s.exportSettings" :key="name" :value="name">{{ name }}</option>
+            </select>
+          </div>
+
+          <div class="eb-field">
+            <label class="eb-label">Project mode</label>
+            <div class="eb-tabs">
+              <button
+                class="eb-tab"
+                :class="{ active: s.projectMode === 'new_per_shot' }"
+                @click="setMode('new_per_shot')"
+              >New project per shot</button>
+              <button
+                class="eb-tab"
+                :class="{ active: s.projectMode === 'existing_project' }"
+                @click="setMode('existing_project')"
+              >Add to a project…</button>
+            </div>
+          </div>
+
+          <div class="eb-actions">
+            <button class="eb-btn eb-btn--ghost eb-btn--mini" :disabled="picking" @click="choose">
+              {{ picking ? 'Choosing…' : (s.projectMode === 'new_per_shot' ? 'Name / place new project…' : 'Choose .aep…') }}
+            </button>
+            <span class="eb-mono eb-muted">{{ s.projectLabel || (s.projectMode === 'new_per_shot' ? 'auto (default location)' : 'no project chosen') }}</span>
           </div>
         </div>
       </div>
 
-      <div v-if="s.inAvid" class="eb-section">
+      <div class="eb-section">
         <div class="eb-section-head">
-          <h3 class="eb-section-title">Renders</h3>
-          <span v-if="pendingRenders.length" class="eb-chip is-on">{{ pendingRenders.length }} new</span>
-          <button class="eb-btn eb-btn--ghost eb-btn--mini" :disabled="loadingRenders" @click="refreshRenders(false)">
-            {{ loadingRenders ? 'Reading…' : 'Rescan' }}
-          </button>
+          <h3 class="eb-section-title">Shots</h3>
+          <span v-if="pendingRenders.length" class="eb-chip is-on">{{ pendingRenders.length }} to import</span>
+          <div class="eb-actions">
+            <button class="eb-btn eb-btn--ghost eb-btn--mini" :disabled="loadingRenders" @click="refreshRenders(false)">
+              {{ loadingRenders ? 'Reading…' : 'Rescan renders' }}
+            </button>
+            <button
+              v-if="s.jobs.length"
+              class="eb-btn eb-btn--ghost eb-btn--mini"
+              @click="doClearJobs"
+            >Clear finished</button>
+          </div>
         </div>
+
         <div v-if="rendersError" class="eb-callout c-bad" style="font-size:11.5px">
           {{ rendersError }}
           <div v-if="!helperHasRenders" class="eb-mono" style="margin-top:6px">
             PYTHONPATH=. python -m service.app
           </div>
         </div>
-        <div v-else-if="!s.renders.length" class="eb-muted" style="font-size:11.5px">
-          Nothing in the render folder yet. Every file AE writes there shows up here —
-          including extra versions of the same comp, which the per-job watcher never sees.
+
+        <div v-if="!shots.length" class="eb-muted">
+          Nothing sent yet. Grab a shot's plates and Send to start one.
         </div>
         <div v-else class="jobs">
-          <div v-for="r in s.renders" :key="r.path" class="job">
-            <div>
-              <div class="eb-mono job-name">{{ r.name }}</div>
-              <div class="job-state">
-                {{ r.job_id ? r.job_id : 'no matching job' }}
-                <span v-if="!r.writing"> · {{ formatSize(r.size) }}</span>
+          <div v-for="sh in shots" :key="sh.key" class="shot-group">
+            <div class="job" :class="{ 'is-orphan': sh.platesMissing.length }">
+              <div style="min-width:0">
+                <div class="job-name-row">
+                  <!-- Multiple versions collapse behind a caret; a single
+                       version needs no disclosure at all. -->
+                  <button
+                    v-if="sh.versions.length > 1"
+                    class="ver-caret"
+                    :class="{ 'is-open': isShotOpen(sh.key) }"
+                    :aria-expanded="String(isShotOpen(sh.key))"
+                    :aria-label="'Show versions of ' + sh.name"
+                    @click="toggleShot(sh.key)"
+                  >›</button>
+                  <span class="eb-mono job-name">{{ sh.name }}</span>
+                </div>
+                <div class="job-state">
+                  {{ sh.status }}
+                  <span v-if="sh.versions.length > 1">
+                    · {{ sh.versions.length }} versions<span v-if="sh.pendingCount">, {{ sh.pendingCount }} to import</span>
+                  </span>
+                </div>
+                <div v-if="sh.platesMissing.length" class="c-bad" style="font-size:11px">
+                  plate deleted: {{ sh.platesMissing.join(', ') }}
+                </div>
+              </div>
+
+              <button
+                v-if="sh.platesMissing.length"
+                class="eb-btn eb-btn--ghost eb-btn--mini"
+                title="The plate is gone from the plates folder, so this can never be re-rendered"
+                @click="doRemoveJob(sh.job)"
+              >Remove</button>
+              <button
+                v-else-if="sh.pendingCount > 1"
+                class="eb-btn eb-btn--primary eb-btn--mini"
+                :disabled="importingRender !== null"
+                title="Import every version of this shot that isn't in the bin yet"
+                @click="doImportAll(sh)"
+              >Import all {{ sh.pendingCount }}</button>
+              <button
+                v-else-if="sh.pending"
+                class="eb-btn eb-btn--primary eb-btn--mini"
+                :disabled="importingRender === sh.pending.path"
+                @click="doImportRender(sh.pending)"
+              >{{ importingRender === sh.pending.path ? 'Importing…' : 'Import' }}</button>
+              <button
+                v-else-if="sh.job && sh.job.state === 'returned'"
+                class="eb-btn eb-btn--primary eb-btn--mini"
+                :disabled="importingId === sh.job.job_id"
+                @click="doImport(sh.job)"
+              >{{ importingId === sh.job.job_id ? 'Importing…' : 'Import' }}</button>
+              <span v-else-if="sh.rendering" class="eb-stat"><b>rendering…</b></span>
+              <span v-else-if="sh.imported" class="eb-stat"><b>in bin</b></span>
+              <span v-else class="eb-stat"><b>in After Effects</b></span>
+            </div>
+
+            <div v-if="sh.versions.length > 1 && isShotOpen(sh.key)" class="versions">
+              <div v-for="v in sh.versions" :key="v.path" class="version">
+                <div style="min-width:0">
+                  <div class="eb-mono" style="font-size:12px; overflow-wrap:anywhere">{{ v.name }}</div>
+                  <div class="eb-muted" style="font-size:11px">
+                    <span v-if="v.writing">rendering…</span>
+                    <span v-else>{{ formatSize(v.size) }}</span>
+                  </div>
+                </div>
+                <span v-if="v.imported" class="eb-stat"><b>in bin</b></span>
+                <span v-else-if="v.writing" class="eb-muted" style="font-size:11px">wait</span>
+                <button
+                  v-else
+                  class="eb-btn eb-btn--ghost eb-btn--mini"
+                  :disabled="importingRender === v.path"
+                  @click="doImportRender(v)"
+                >{{ importingRender === v.path ? 'Importing…' : 'Import' }}</button>
               </div>
             </div>
-            <span v-if="r.imported" class="eb-stat"><b>imported</b></span>
-            <span v-else-if="r.writing" class="eb-stat"><b>rendering…</b></span>
-            <button
-              v-else
-              class="eb-btn eb-btn--primary eb-btn--mini"
-              :disabled="importingRender === r.path"
-              @click="doImportRender(r)"
-            >{{ importingRender === r.path ? 'Importing…' : 'Import to Avid' }}</button>
           </div>
         </div>
       </div>
@@ -298,7 +386,7 @@
         <div class="eb-section-head">
           <button class="log-toggle" :aria-expanded="String(s.logOpen)" @click="s.logOpen = !s.logOpen">
             <span class="log-caret" :class="{ 'is-open': s.logOpen }">›</span>
-            <h3 class="eb-section-title" style="margin:0">Log</h3>
+            <h3 class="eb-section-title" style="margin:0">Diagnostics</h3>
             <span v-if="logEntries.length" class="eb-muted" style="font-size:11px">{{ logEntries.length }}</span>
             <span v-if="!s.logOpen && logErrorCount" class="c-bad" style="font-size:11px">· {{ logErrorCount }} error{{ logErrorCount === 1 ? '' : 's' }}</span>
           </button>
@@ -325,16 +413,26 @@
           </div>
         </div>
         <div v-if="!s.logOpen" class="eb-muted" style="font-size:11.5px">
-          Hidden. Open it when something needs diagnosing, or to copy it here.
+          Build {{ uiBuild }} · open when something needs diagnosing.
         </div>
-        <div v-else-if="!logEntries.length" class="eb-muted">No log yet.</div>
-        <div v-else class="eb-console" ref="logbox">
-          <div v-for="(e, i) in logEntries" :key="i">
-            <span class="c-dim">{{ e.t }}</span>
-            <span :class="e.kind === 'error' ? 'c-bad' : 'c-accent'">{{ e.label }}</span>
-            <span v-if="e.detail"> {{ e.detail }}</span>
+        <!-- These are SEPARATE v-ifs, not one chain. Inserting this actions row
+             as a `v-else` previously swallowed the open case and left the
+             console below it unreachable — the log rendered nothing at all. -->
+        <template v-if="s.logOpen">
+          <div class="eb-actions" style="margin-bottom:8px">
+            <label class="eb-chip" :class="{ 'is-on': s.pollPaused }" title="Stop the panel polling Media Composer for the playhead position">
+              <input v-model="s.pollPaused" type="checkbox" style="margin-right:6px"> Pause updates
+            </label>
           </div>
-        </div>
+          <div v-if="!logEntries.length" class="eb-muted">No log yet.</div>
+          <div v-else class="eb-console" ref="logbox">
+            <div v-for="(e, i) in logEntries" :key="i">
+              <span class="c-dim">{{ e.t }}</span>
+              <span :class="e.kind === 'error' ? 'c-bad' : 'c-accent'">{{ e.label }}</span>
+              <span v-if="e.detail"> {{ e.detail }}</span>
+            </div>
+          </div>
+        </template>
         <textarea ref="logcopy" class="eb-hidden-copy" :value="logText" readonly aria-hidden="true"></textarea>
       </div>
     </div>
@@ -349,7 +447,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-07-29.6 · manual solo + auto-grab'
+const UI_BUILD = '2026-07-29.17 · range stacks restored'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -371,7 +469,7 @@ function sig(list) {
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', probing: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0 }
+    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', probing: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0 }
   },
   computed: {
     logText() {
@@ -383,7 +481,66 @@ export default {
       return this.logEntries.filter((e) => e.kind === 'error').length
     },
     pendingRenders() {
-      return (this.s.renders || []).filter((r) => !r.imported)
+      return (this.s.renders || []).filter((r) => !r.imported && !r.writing)
+    },
+    // Jobs and render files are two views of the same thing, and the editor
+    // thinks in shots — so merge them into one list keyed by shot name, with
+    // every render of that shot as a version. A second render out of the same
+    // comp becomes "another version of a shot you recognise" rather than an
+    // orphan file in a separate list.
+    shots() {
+      const byKey = {}
+      const keyFor = (name) => String(name || '').trim() || '(unnamed)'
+
+      for (const j of this.s.jobs || []) {
+        // shot_name arrives from the helper; fall back to the job id so an
+        // older helper still groups sanely rather than collapsing everything.
+        const name = j.shot_name || j.job_id
+        const k = keyFor(name)
+        byKey[k] = byKey[k] || { key: k, name, job: null, versions: [], platesMissing: [] }
+        byKey[k].job = j
+        byKey[k].platesMissing = j.plates_missing || []
+      }
+
+      for (const r of this.s.renders || []) {
+        const job = (this.s.jobs || []).find((j) => j.job_id === r.job_id)
+        const name = (job && (job.shot_name || job.job_id)) || r.name.replace(/\.[^.]+$/, '')
+        const k = keyFor(name)
+        byKey[k] = byKey[k] || { key: k, name, job: job || null, versions: [], platesMissing: [] }
+        byKey[k].versions.push(r)
+      }
+
+      return Object.values(byKey).map((sh) => {
+        sh.versions.sort((a, b) => (b.modified || 0) - (a.modified || 0))
+        sh.rendering = sh.versions.some((v) => v.writing)
+        // Newest un-imported, settled render is what Import acts on.
+        const importable = sh.versions.filter((v) => !v.imported && !v.writing)
+        sh.pending = importable[0] || null // newest first
+        sh.pendingCount = importable.length
+        sh.imported = sh.versions.length > 0 && sh.versions.every((v) => v.imported)
+        sh.status = sh.platesMissing.length
+          ? 'plate missing'
+          : sh.pending
+            ? 'render ready'
+            : sh.rendering
+              ? 'rendering'
+              : sh.imported
+                ? 'in bin'
+                : sh.job
+                  ? this.stateLabel(sh.job.state)
+                  : 'render'
+        return sh
+      })
+    },
+    rangeReadyCount() {
+      if (!this.s.range) return 0
+      return this.s.range.shots.filter((sh) => (sh.grabbed || []).length && sh.shotMeta).length
+    },
+    settingsSummary() {
+      const bits = [this.s.handles + 'f handles']
+      bits.push(this.s.projectMode === 'existing_project' ? 'shared project' : 'project per shot')
+      if (this.s.exportSetting) bits.push(this.s.exportSetting)
+      return bits.join(' · ')
     },
     // Renders/reset routes landed in helper 0.0.2. The helper does not
     // hot-reload, so this is routinely false until the user restarts it.
@@ -453,11 +610,12 @@ export default {
     's.prefix'(v) { this.savePref('prefix', v) },
     's.suffix'(v) { this.savePref('suffix', v) },
     's.projectMode'(v) { this.savePref('projectMode', v) },
-    's.logOpen'(v) { this.savePref('logOpen', v ? '1' : '0') },
+    's.logOpen'(v) { this.savePref('logOpen.v2', v ? '1' : '0') },
+    's.settingsOpen'(v) { this.savePref('settingsOpen', v ? '1' : '0') },
     's.pollPaused'(v) { this.savePref('pollPaused', v ? '1' : '0'); if (!v) this.wakePolling() },
     // Turning auto-grab on must restore a responsive poll, or it could sit in
     // the slow lane and take seconds to notice a soloed track.
-    's.autoGrab'(v) { if (v) this.wakePolling() }
+    's.autoGrab'(v) { this.savePref('autoGrab', v ? '1' : '0'); if (v) this.wakePolling() }
   },
   methods: {
     savePref(k, v) {
@@ -472,7 +630,11 @@ export default {
         if (g('projectMode')) this.s.projectMode = g('projectMode')
         if (g('projectPath') != null) this.s.projectPath = g('projectPath')
         if (g('projectLabel') != null) this.s.projectLabel = g('projectLabel')
-        if (g('logOpen') != null) this.s.logOpen = g('logOpen') === '1'
+        // v2 key: the old one may hold a stale "collapsed" from when the log
+        // defaulted shut, which would override the new default.
+        if (g('logOpen.v2') != null) this.s.logOpen = g('logOpen.v2') === '1'
+        if (g('settingsOpen') != null) this.s.settingsOpen = g('settingsOpen') === '1'
+        if (g('autoGrab') != null) this.s.autoGrab = g('autoGrab') === '1'
         if (g('pollPaused') != null) this.s.pollPaused = g('pollPaused') === '1'
       } catch (e) {}
     },
@@ -736,6 +898,87 @@ export default {
         this.grabbingAll = false
       }
     },
+    // Read the sequence's IN/OUT marks and enumerate every shot in the range.
+    async doAnalyzeRange() {
+      this.s.rangeAnalyzing = true
+      this.s.message = 'Reading the marked range…'
+      try {
+        const r = await tl.analyzeRange({
+          parseEdl: (edlPath) => api.parseEdl(edlPath).then((x) => x.clips)
+        })
+        const totalPlates = r.shots.reduce((n, sh) => n + sh.stack.length, 0)
+        this.s.range = {
+          markIn: r.shot.markIn,
+          markOut: r.shot.markOut,
+          shots: r.shots,
+          totalPlates,
+        }
+        this.s.message = r.shots.length + ' shot(s), ' + totalPlates + ' plate(s) in ' +
+          r.shot.markIn + '–' + r.shot.markOut
+      } catch (e) {
+        this.s.range = null
+        this.s.message = 'Range error: ' + e.message
+      } finally {
+        this.s.rangeAnalyzing = false
+      }
+    },
+    // Tracks still to grab across the range, ascending. V1 first because each
+    // shot's V1 marker names that shot's whole stack.
+    rangeTracksRemaining() {
+      if (!this.s.range) return []
+      const out = []
+      for (const sh of this.s.range.shots) {
+        for (const p of sh.stack) {
+          const already = (sh.grabbed || []).some((g) => g.track === p.track)
+          if (!already && !out.includes(p.track)) out.push(p.track)
+        }
+      }
+      return out.sort((a, b) => a - b)
+    },
+    // Grab ONE track's plate for EVERY shot in the range. This is the payoff of
+    // the range design: soloing is per-track, not per-shot, so N shots × M
+    // tracks costs only M manual solos.
+    async doGrabTrackAcrossRange(track) {
+      if (!this.s.range) return
+      const todo = this.s.range.shots
+        .map((sh, i) => ({ sh, i }))
+        .filter(({ sh }) => sh.stack.some((p) => p.track === track) &&
+          !(sh.grabbed || []).some((g) => g.track === track))
+      if (!todo.length) return
+
+      this.s.grabbingTrack = track
+      let done = 0
+      try {
+        for (const { sh, i } of todo) {
+          this.s.message = 'Grabbing V' + track + ' — shot ' + (i + 1) + '/' + this.s.range.shots.length + '…'
+          // eslint-disable-next-line no-await-in-loop
+          const grabbed = await tl.grabShot({
+            destBinPath: this.s.destBin,
+            handles: Number(this.s.handles) || 0,
+            trackNumber: track,
+            baseName: track === 1 ? '' : (sh.baseName || ''),
+            atTC: sh.atTC,
+            atFrame: sh.atFrame,
+            parseEdl: (edlPath) => api.parseEdl(edlPath).then((x) => x.clips)
+          }).catch((e) => { throw new Error('shot ' + (i + 1) + ' (' + sh.atTC + '): ' + e.message) })
+
+          if (track === 1) {
+            this.$set(sh, 'baseName', grabbed.shot.shot_name)
+            this.$set(sh, 'shotMeta', grabbed.shot)
+          }
+          const kept = (sh.grabbed || []).filter((g) => g.track !== track)
+          this.$set(sh, 'grabbed', kept.concat([grabbed.plate]).sort((a, b) => a.track - b.track))
+          done += 1
+        }
+        const left = this.rangeTracksRemaining()
+        this.s.message = 'Grabbed V' + track + ' for ' + done + ' shot' + (done === 1 ? '' : 's') +
+          (left.length ? ' — next: solo V' + left[0] : ' — all plates grabbed, ready to Send')
+      } catch (e) {
+        this.s.message = 'Range grab stopped after ' + done + ' — ' + e.message
+      } finally {
+        this.s.grabbingTrack = null
+      }
+    },
     async doGrab(track) {
       this.s.grabbingTrack = track
       this.s.message = 'Grabbing V' + track + '…'
@@ -891,16 +1134,42 @@ export default {
       const mb = n / (1024 * 1024)
       return mb >= 1 ? mb.toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB'
     },
+    isShotOpen(key) {
+      return !!this.openShots[key]
+    },
+    toggleShot(key) {
+      this.$set(this.openShots, key, !this.openShots[key])
+    },
+    // Import every version of a shot that isn't in the bin yet. Sequential —
+    // each import is an MCAPI call and Avid is happier one at a time.
+    async doImportAll(sh) {
+      const todo = sh.versions.filter((v) => !v.imported && !v.writing)
+      if (!todo.length) return
+      let done = 0
+      for (const v of todo) {
+        this.s.message = 'Importing ' + v.name + ' (' + (done + 1) + '/' + todo.length + ')…'
+        // eslint-disable-next-line no-await-in-loop
+        const ok = await this.doImportRender(v, true)
+        if (!ok) {
+          this.s.message = 'Stopped after ' + done + ' of ' + todo.length + ' — ' + this.s.message
+          return
+        }
+        done += 1
+      }
+      this.s.message = 'Imported ' + done + ' version' + (done === 1 ? '' : 's') + ' of ' + sh.name
+    },
     // Import any render file, matched to a job or not. This is what makes a
     // second/third version out of one comp usable.
-    async doImportRender(r) {
+    // Returns true on success so doImportAll can stop on the first failure
+    // instead of piling up errors.
+    async doImportRender(r, quiet = false) {
       if (!this.s.inAvid) {
         this.s.message = 'Import needs Media Composer (MCAPI).'
-        return
+        return false
       }
       this.importingRender = r.path
       const bin = this.s.destBin
-      this.s.message = 'Importing ' + r.name + ' into ' + bin + '…'
+      if (!quiet) this.s.message = 'Importing ' + r.name + ' into ' + bin + '…'
       try {
         await tl.importReturn({ filePath: r.path, destBinPath: bin })
         await api.markRenderImported(r.path)
@@ -908,114 +1177,138 @@ export default {
         if (r.job_id) {
           try { await api.markImported(r.job_id, bin) } catch (e) { /* already closed */ }
         }
-        this.s.message = 'Imported ' + r.name + ' into ' + bin
-        await this.refreshRenders()
+        if (!quiet) this.s.message = 'Imported ' + r.name + ' into ' + bin
+        await this.refreshRenders(true)
         await this.refreshJobs()
+        return true
       } catch (e) {
         this.s.message = 'Import error: ' + e.message
+        return false
       } finally {
         this.importingRender = null
       }
     },
-    async doSend() {
-      // Tokens don't survive a helper restart, but the remembered PATH does —
-      // re-register it for a fresh token so the last project sticks.
-      if (this.s.projectMode === 'existing_project' && !this.s.projectToken) {
-        if (this.s.projectPath) {
-          try {
-            const r = await api.pickProject(this.s.projectPath)
-            this.s.projectToken = r.target_project_token
-            this.s.projectLabel = r.label
-          } catch (e) {
-            this.s.message = 'Saved project not found (' + (this.s.projectLabel || this.s.projectPath) + ') — Choose .aep… again.'
-            return
-          }
-        } else {
-          this.s.message = 'Choose a project first (Choose .aep…), or switch to New project per shot.'
-          return
+    // Send every shot in the marked range as its own job — same pipeline as a
+    // single Send, run N times. Stops on the first failure so a half-sent batch
+    // is obvious rather than silently partial.
+    async doSendRange() {
+      const ready = (this.s.range ? this.s.range.shots : [])
+        .filter((sh) => (sh.grabbed || []).length && sh.shotMeta)
+      if (!ready.length) {
+        this.s.message = 'Nothing to send — grab V1 across the range first.'
+        return
+      }
+      if (!(await this.ensureProjectToken())) return
+      this.s.sending = true
+      let sent = 0
+      try {
+        for (const sh of ready) {
+          this.s.message = 'Sending ' + (sent + 1) + '/' + ready.length + ' (' + sh.baseName + ')…'
+          // eslint-disable-next-line no-await-in-loop
+          const job = await this.sendOneShot(sh.shotMeta, sh.grabbed)
+          if (!job) return // sendOneShot set the message
+          sent += 1
+        }
+        this.s.message = 'Sent ' + sent + ' job' + (sent === 1 ? '' : 's') + ' from the marked range.'
+        this.s.range = null
+        await this.refreshJobs()
+      } catch (e) {
+        this.s.message = 'Range send stopped after ' + sent + ' — ' + e.message
+      } finally {
+        this.s.sending = false
+      }
+    },
+    // Tokens don't survive a helper restart, but the remembered PATH does —
+    // re-register it for a fresh token so the last project sticks.
+    async ensureProjectToken() {
+      if (this.s.projectMode !== 'existing_project' || this.s.projectToken) return true
+      if (this.s.projectPath) {
+        try {
+          const r = await api.pickProject(this.s.projectPath)
+          this.s.projectToken = r.target_project_token
+          this.s.projectLabel = r.label
+          return true
+        } catch (e) {
+          this.s.message = 'Saved project not found (' + (this.s.projectLabel || this.s.projectPath) + ') — Choose .aep… again.'
+          return false
         }
       }
+      this.s.message = 'Choose a project first (Choose .aep…), or switch to New project per shot.'
+      return false
+    },
+    // One shot: name it, warn on collisions, prepare, export each plate, send.
+    // Returns the job on success, null on failure (message already set).
+    async sendOneShot(shotMeta, grabbedPlates) {
+      const shot = { ...shotMeta }
+      const named = (this.s.prefix || '') + shot.shot_name + (this.s.suffix || '')
+      shot.shot_name = named
+      const plates = tl.plateOffsets(grabbedPlates, Math.round(parseFloat(shot.frame_rate) || 24))
+        .map((p) => ({ ...p, name: (this.s.prefix || '') + p.name + (this.s.suffix || '') }))
+      logMcapiVerbose('sending plates (final names)', {
+        shot: named,
+        plates: plates.map((p) => ({ track: 'V' + p.track, name: p.name, offset: p.offset_frames })),
+      })
+      try {
+        const clashes = []
+        for (const p of plates) {
+          // eslint-disable-next-line no-await-in-loop
+          const chk = await api.plateExists(p.name)
+          if (chk.exists) clashes.push(...(chk.files || []))
+        }
+        if (clashes.length) {
+          const ok = window.confirm(
+            'These plate files already exist:\n\n' + clashes.join('\n') +
+            '\n\nOverwrite them?\n(Cancel to add a name prefix/suffix, then Send again.)'
+          )
+          if (!ok) {
+            this.s.message = 'Cancelled — add a prefix/suffix to rename, then Send again.'
+            return null
+          }
+        }
+      } catch (e) { /* if the check fails, proceed */ }
+
+      const prep = await api.prepare(named)
+      const exported = []
+      for (let i = 0; i < plates.length; i += 1) {
+        const p = plates[i]
+        this.s.message = 'Exporting ' + named + ' plate ' + (i + 1) + '/' + plates.length + '…'
+        // eslint-disable-next-line no-await-in-loop
+        const file = await tl.exportShot({
+          mobId: p.mobId, exportDir: prep.export_dir, fileName: p.name,
+          exportSettingsName: this.s.exportSetting,
+        })
+        exported.push({ name: p.name, file, track: p.track, order: p.order, offset_frames: p.offset_frames || 0 })
+      }
+      return api.send({
+        template_id: this.s.templateId,
+        handles: Number(this.s.handles) || 0,
+        project_mode: this.s.projectMode,
+        target_project_token: this.s.projectToken || null,
+        job_id: prep.job_id,
+        shot,
+        reference_path: exported.length ? exported[0].file : null,
+        plates: exported,
+      })
+    },
+    async doSend() {
+      if (!(await this.ensureProjectToken())) return
       this.s.sending = true
       try {
-        const payload = {
-          template_id: this.s.templateId,
-          handles: Number(this.s.handles) || 0,
-          project_mode: this.s.projectMode,
-          // token = existing project to open, or new-project save location
-          target_project_token: this.s.projectToken || null
-        }
-
+        let job
         if (this.s.inAvid) {
-          // 1. plates were collected by Grab (one pass per track); compute the
-          //    AE layer offsets across the collected set.
-          const shot = { ...this.s.stackShot }
-          const named = (this.s.prefix || '') + shot.shot_name + (this.s.suffix || '')
-          shot.shot_name = named
-          const grabbed = { shot }
-          const plates = tl.plateOffsets(this.s.grabbed, Math.round(parseFloat(shot.frame_rate) || 24))
-            .map((p) => ({
-              ...p,
-              name: (this.s.prefix || '') + p.name + (this.s.suffix || '')
-            }))
-          logMcapiVerbose('sending plates (final names)', {
-            shot: named,
-            prefix: this.s.prefix || null,
-            suffix: this.s.suffix || null,
-            plates: plates.map((p) => ({ track: 'V' + p.track, name: p.name, offset: p.offset_frames }))
-          })
-          // Warn if any plate would overwrite an existing file (they can add a
-          // prefix/suffix). Every plate is checked — upper plates take their own
-          // marker names, so a collision is not only possible on the base name.
-          try {
-            const clashes = []
-            for (const p of plates) {
-              const chk = await api.plateExists(p.name)
-              if (chk.exists) clashes.push(...(chk.files || []))
-            }
-            if (clashes.length) {
-              const ok = window.confirm(
-                'These plate files already exist in the plates folder:\n\n' +
-                clashes.join('\n') +
-                '\n\nOverwrite them?\n(Cancel to add a name prefix/suffix, then Send again.)'
-              )
-              if (!ok) {
-                this.s.message = 'Cancelled — add a prefix/suffix to rename, then Send again.'
-                return
-              }
-            }
-          } catch (e) { /* if the check fails, proceed */ }
-          // 2. reserve the job + shared plates folder
-          this.s.message = 'Preparing…'
-          const prep = await api.prepare(named)
-          // 3. export every plate in the stack (V1 base first, then _plNN)
-          const exportedPlates = []
-          for (let i = 0; i < plates.length; i += 1) {
-            const p = plates[i]
-            this.s.message = 'Exporting plate ' + (i + 1) + '/' + plates.length + ' (' + p.name + ')…'
-            const file = await tl.exportShot({
-              mobId: p.mobId,
-              exportDir: prep.export_dir,
-              fileName: p.name,
-              exportSettingsName: this.s.exportSetting
-            })
-            exportedPlates.push({
-              name: p.name,
-              file,
-              track: p.track,
-              order: p.order,
-              offset_frames: p.offset_frames || 0
-            })
-          }
-          // 4. hand the real shot + plates to the helper (reference = V1 base)
-          payload.job_id = prep.job_id
-          payload.shot = grabbed.shot
-          payload.reference_path = exportedPlates.length ? exportedPlates[0].file : null
-          payload.plates = exportedPlates
+          // Plates were collected by Grab (one pass per track). Same pipeline
+          // the range send uses, so the two can't drift apart.
+          job = await this.sendOneShot(this.s.stackShot, this.s.grabbed)
+          if (!job) return // sendOneShot set the message
         } else {
           this.s.message = 'Sending (placeholder shot)…'
+          job = await api.send({
+            template_id: this.s.templateId,
+            handles: Number(this.s.handles) || 0,
+            project_mode: this.s.projectMode,
+            target_project_token: this.s.projectToken || null,
+          })
         }
-
-        const job = await api.send(payload)
         this.s.message = 'Sent — ' + job.job_id + ' (' + this.stateLabel(job.state) + ')'
         // Clear the collected stack so the next shot starts clean (the plates
         // are now the job's; re-sending them would duplicate the work).
@@ -1106,6 +1399,27 @@ export default {
 .plate-name.is-preview { color: var(--muted); font-style: italic; }
 .plate-done { display: flex; align-items: center; gap: 8px; }
 .job.is-orphan { border-color: var(--bad); }
+.name-affix { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.name-affix .eb-input { flex: 1; min-width: 0; }
+.shot-group { display: flex; flex-direction: column; gap: 4px; }
+.job-name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ver-caret {
+  background: none; border: 0; padding: 0; cursor: pointer; color: var(--muted-2);
+  font-size: 15px; line-height: 1; transition: transform 0.12s ease; flex: none;
+}
+.ver-caret.is-open { transform: rotate(90deg); }
+.versions { display: flex; flex-direction: column; gap: 4px; margin: 0 0 4px 18px; }
+.range-shots { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.range-shot {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--input-bg); border: 1px solid var(--line);
+  border-radius: var(--r-ctrl); padding: 6px 10px;
+}
+.version {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--input-bg); border: 1px solid var(--line);
+  border-radius: var(--r-ctrl); padding: 6px 10px;
+}
 .eb-chip.is-on { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
 
 .log-toggle {

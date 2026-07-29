@@ -256,6 +256,36 @@ def test_renders_listing_and_reset():
         assert by_name["SHOT_V.mov"]["imported"] is False
 
 
+def test_rerender_to_same_name_is_not_imported():
+    """Deleting a render and re-rendering to the SAME filename must come back as
+    new. Keying import history on the path alone made re-renders show as
+    'in bin' forever, with no way to import the replacement."""
+    import os
+    import time as _time
+
+    with TestClient(app) as c:
+        settings.roots.watch_root.mkdir(parents=True, exist_ok=True)
+        f = settings.roots.watch_root / "REDO_010.mov"
+        f.write_bytes(b"FIRST RENDER")
+        assert c.post("/v1/aebridge/renders/imported", json={"path": str(f)}).status_code == 200
+        by_name = {r["name"]: r for r in c.get("/v1/aebridge/renders").json()}
+        assert by_name["REDO_010.mov"]["imported"] is True
+
+        # Editor deletes it and renders again to the same name.
+        f.unlink()
+        _time.sleep(0.01)
+        f.write_bytes(b"SECOND RENDER, DIFFERENT LENGTH")
+        os.utime(f, (_time.time() + 5, _time.time() + 5))  # ensure a distinct mtime
+
+        by_name = {r["name"]: r for r in c.get("/v1/aebridge/renders").json()}
+        assert by_name["REDO_010.mov"]["imported"] is False, "re-render still looked imported"
+
+        # Importing the replacement marks the NEW file, not the old record.
+        assert c.post("/v1/aebridge/renders/imported", json={"path": str(f)}).status_code == 200
+        by_name = {r["name"]: r for r in c.get("/v1/aebridge/renders").json()}
+        assert by_name["REDO_010.mov"]["imported"] is True
+
+
 def test_imported_renders_survive_helper_restart():
     """Import history is persisted: a fresh Store (i.e. a helper restart) must
     still know what has already been pulled into Avid."""
@@ -281,5 +311,6 @@ if __name__ == "__main__":
     test_renders_feature_is_advertised()
     test_missing_plate_reported()
     test_renders_listing_and_reset()
+    test_rerender_to_same_name_is_not_imported()
     test_imported_renders_survive_helper_restart()
     print("ALL SMOKE TESTS PASSED")

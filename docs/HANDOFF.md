@@ -17,12 +17,26 @@ architecture but is its **own** product (own helper port, no ElementalEngine).
   `docs/BUILD_AND_INSTALL.md` (run/build), `docs/PHASE_MULTIPLATE.md` (future
   phase). The `avid-panel-dev` skill covers the EB stack conventions.
 
-## Status: single-plate round trip WORKS end to end (verified in Avid)
+## Status: the FULL grid works end to end (verified in Avid 2026-07-29)
 
-Grab V1 plate → export opaque plate → AE opens correctly-sized comp with the
-plate → editor renders into the shared `render/` folder → helper watch-folder
-flips the job to `returned` → panel **Import to Avid** does `ImportFile` back
-into the export bin. Confirmed working by the user on real MXF media.
+All three shapes confirmed by the user on real MXF media:
+
+1. **Single plate.** Park the playhead → grab → export → AE comp → render into
+   the shared `render/` folder → watcher flips the job to `returned` → **Import**
+   does `ImportFile` back into the export bin.
+2. **Vertical stack.** One shot, several video tracks → one plate per track
+   (solo each track; auto-grab picks it up) → one layered comp, plates stacked
+   bottom→top with per-plate `startTime`.
+3. **Horizontal batch.** IN/OUT marks over several shots → **Analyze range** →
+   **Grab V<n> for all shots** once per track → **Send N shots** → N jobs, N
+   comps, N renders returning independently.
+
+Also verified: **`plateOffsets` in AE** — a stack whose tracks have different
+spans lands with the layers correctly offset (this had only been unit-tested
+until now, since every earlier test stack shared one span).
+
+What is NOT verified: auto-solo (parked — see the `DoCommand` fact), and
+`ffprobe` return validation (still stubbed).
 
 ## The grab pipeline (as-built) — `src/utils/api/timeline.js`
 
@@ -46,10 +60,22 @@ watches for each solo and grabs it, so they never leave the timeline.
    isolated plate; we still require a subclip whose `Tracks` names a single
    video track.
 4. **Source handles:** `extendWithHandles` re-subclips with
-   `add_frames_at_head/end`, dropping only the edge Avid reports as unavailable
-   (per-edge clamp), then a start/end **position sanity check**; on mismatch it
-   falls back to the exact (no-handle) subclip. Handles are clamped **per
-   plate**, which is why layer offsets subtract each plate's own head handles.
+   `add_frames_at_head/end`, then a start/end **position sanity check**; on
+   mismatch it falls back to the exact (no-handle) subclip. Handles are clamped
+   **per plate**, which is why layer offsets subtract each plate's own head
+   handles.
+   **Handle availability must never fail a grab.** Different clips on one track
+   sit at different source positions, so one shot can have handles at both edges
+   and its neighbour none —
+   `code=2 {"ErrorMessage":"Invalid add_frame_at_head: Requested frames not available.","ErrorType":66}`.
+   The clamp is an explicit **ladder**: `[h,h] → [0,h] → [h,0] → [0,0]`, any
+   `handlesUnavailable` error stepping to the next rung. It used to parse Avid's
+   error text to decide which edge to drop, which **dead-ended** (Avid still says
+   `add_frame_at_head` once head is 0) and threw, killing a whole range batch
+   over one missing handle. If every rung refuses, `grabSourceHandledMob`
+   exports the exact scratch subclip it already holds rather than throwing — a
+   plate with no handles is still a usable plate. Non-handle errors still
+   propagate. Unit-tested against the real error string (`handles.mjs`).
 5. **Name:** **every** pass reads `getMarkers(seq, track)` — restricted to the
    grabbed track via the GetMarkers track filter **and** a client-side track
    guard — filtered to the clip's record span, then the marker **nearest the
@@ -66,6 +92,18 @@ what is under the playhead, without grabbing anything.
 - **MCAPI runs in the PANEL (WebView), not the helper.** Avid injects the
   gateway + token into the panel only. All timeline/MCAPI work is in
   `timeline.js`. The helper does filesystem/AE/paths.
+- **TWO FRAME SPACES. Do not mix them.** `CreateSubClip`'s `head_frame` /
+  `end_frame` are **relative to the sequence start**; EDL timecodes and mob
+  columns are **absolute**. Avid's own `GetViewerMobs.currentFrame` proves it:
+  `4804` for `01:03:20:04` on a sequence starting `01:00:00:00`.
+  Passing an absolute frame (`90170`) into a sequence only 11674 frames long
+  gets you **`Invalid add_frame_at_head: Requested frames not available.`
+  (ErrorType 66)** — a message that says nothing about frame position and sent
+  this hunt into the handle code twice before the log showed the failure was in
+  step 1, not `extendWithHandles`. `analyzeRange` keeps both (`atFrame`
+  relative, `atTC` absolute) and `grabSourceHandledMob` now range-checks
+  `head_frame` against `Frame Count Duration` and says what is actually wrong.
+  Unit-tested against this sequence (`frames.mjs`).
 - **`CreateSubClip` IGNORES `track_list`.** This is the single biggest trap. It
   uses ALL tracks (or all *enabled* tracks). The ONLY way to isolate a track on
   export is **`enabled_tracks_only: true`** — which respects the timeline's
@@ -143,8 +181,17 @@ what is under the playhead, without grabbing anything.
   `numSegments > 0` only means "this track has something on it".
 - **GetMarkers** returns each marker's `track_label` and accepts an optional
   `track` filter — used to take V1's comment on a stacked shot, not V2's.
-- **Marks are not readable via MCAPI** (`GetValues` is test-only; ExportEDL
-  ignores marks). We key off the **playhead**, not marks.
+- **MARKS *ARE* READABLE — via `GetMobInfo` columns.** CONFIRMED in Avid
+  2026-07-29: the record sequence's own columns include **`Mark IN`**,
+  **`Mark OUT`** and `IN-OUT` (e.g. `01:03:03:01` / `01:03:20:04` / `17:03`).
+  `getCurrentShot()` now returns `markIn`/`markOut`, and `analyzeRange()` splits
+  the marked range into one shot per V1 clip. This is the **third** "can't be
+  done" in this doc that turned out to be false — the earlier conclusion came
+  from `GetValues` being test-only and ExportEDL ignoring marks; nobody checked
+  the mob columns. The stale claim is kept below only as a warning:
+- ~~**Marks are not readable via MCAPI**~~ — WRONG, see above. What *is* true:
+  `GetValues` is test-only and ExportEDL ignores marks, so the single-shot grab
+  keys off the **playhead**. Range work reads the marks from the mob columns.
 - **No delete-mob API.** Scratch subclips accumulate in an `AEBridge_Scratch`
   bin; not programmatically deletable.
 - **CreateSubClip:** set `head_frame/end_frame` to **-1** unless you mean to use
@@ -175,15 +222,17 @@ what is under the playhead, without grabbing anything.
   the affixes being ignored.
 - **On-screen MCAPI log** in the panel (Avid WebView has no console): ring buffer
   in `src/utils/api/mcapi.js` (`getMcapiLog`/`logMcapiVerbose`); Log section with
-  Copy/Clear/Probe in `AEBridgePanel.vue`. **Collapsed by default** (`s.logOpen`,
-  remembered in `localStorage`); the collapsed header still shows the entry
-  count and an error count, so a failure stays visible without opening it. The
+  Copy/Clear/Probe in `AEBridgePanel.vue`. **OPEN by default** while the round
+  trip is still being debugged (`s.logOpen`, remembered under `logOpen.v2` — the
+  key was bumped so a stored "collapsed" from the old default couldn't override
+  it). Collapse it for a consumer build. The collapsed header still shows the
+  entry count and an error count, so a failure stays visible without opening. The
   ring buffer always captures regardless — collapsing only hides the view, so
   asking the user to open it after a failure still yields the full history.
 - **UI build stamp:** `UI_BUILD` const in `AEBridgePanel.vue` renders as a header
   pill and logs on load. **Bump it on every UI change** so the user can tell
   which build the Avid WebView has cached (the WebView caches aggressively;
-  reopen the panel to force a fresh bundle). Current: `2026-07-29.6`.
+  reopen the panel to force a fresh bundle). Current: `2026-07-29.17`.
 - Project persistence (remembers last `.aep` across panel reloads AND helper
   restarts, re-registering the path for a fresh token).
 
@@ -212,8 +261,18 @@ test can write. This is not hypothetical: on 2026-07-29 the smoke tests wrote
 stub plates and renders into the live Desktop folders, where they showed up in
 the panel's Renders list.
 
+**`yarn check:tpl` — run it after any panel template edit.** Vue compiles a
+mid-chain `v-else` without complaint and silently drops every branch after it.
+That happened when Pause updates was inserted into the Diagnostics block as a
+`v-else`: it swallowed the `logOpen === true` case and left the console below
+unreachable, so **the entire MCAPI log rendered nothing** while looking fine.
+`tools/check-vue-template.js` walks the compiled AST and fails on any `v-else`
+that is not last in its chain. Neither `node --check` nor `compile()` errors
+catch this.
+
 ```bash
 nvm use && yarn install && yarn dev        # 127.0.0.1:3010/app
+yarn check:tpl                             # unreachable v-else branches
 PYTHONPATH=. python -m service.app         # 127.0.0.1:8010
 PYTHONPATH=. python tests/test_smoke.py
 node --check src/utils/api/timeline.js     # JS syntax, no Avid needed
@@ -299,6 +358,70 @@ MCAPI has **no push events**, so the shot readout must poll — and each tick is
 - **Never backs off** while auto-grab is on or a grab/send is in flight.
 - **Pause updates** chip stops it outright (remembered); Refresh still works.
 
+## Marked range → many shots (UI `2026-07-29.11`)
+
+A marked range spanning several shots becomes one comp/job **per V1 clip**,
+each with its own vertical plate stack. Enumeration is VERIFIED in Avid; the
+grab and send across a range are written but UNRUN.
+
+- **`analyzeRange()`** reads `Mark IN`/`Mark OUT` from the sequence's mob
+  columns (see the marks fact above), runs each video track's EDL **once**, and
+  returns one shot per V1 clip **overlapping** the range — a range starting
+  mid-clip still includes that shot. Each shot carries `atTC`/`atFrame` (a frame
+  just inside the clip) plus its own stack.
+- **Nothing moves the playhead.** `findClipAtPlayhead` is just "the clip at this
+  TC", and `CreateSubClip` takes an arbitrary `head_frame`, so any clip in the
+  range is targetable directly. `grabShot({ atTC, atFrame })` now takes an
+  explicit position, defaulting to the playhead — that generalisation is what
+  makes range grabbing possible at all.
+- **Soloing is per TRACK, not per shot.** `doGrabTrackAcrossRange(track)` grabs
+  that one track's plate for **every** shot in the range, so N shots × M tracks
+  costs only **M** manual solos. This is why the manual-soloing limitation
+  matters far less at scale than it first appears. V1 goes first (each shot's
+  own V1 marker names that shot's stack); upper tracks inherit per shot.
+- **`doSendRange()`** fans out to one job per shot, reusing `sendOneShot()` —
+  which `doSend()` also calls, so the single and batch paths cannot drift.
+  Stops on the first failure so a partial batch is obvious.
+- Per-shot state lives on the range object (`sh.grabbed`, `sh.baseName`,
+  `sh.shotMeta`) via `$set`, separate from the single-shot `s.grabbed`.
+
+## Panel layout — consumer simplification (UI `2026-07-29.7`)
+
+Four always-visible things: **Current shot**, **Plate stack**, **Send**,
+**Shots**. Everything else is behind a disclosure. Nothing was removed —
+controls moved from *always visible* to *visible when relevant*.
+
+- **Shots** replaces the separate Jobs and Renders lists. `shots` (computed)
+  merges them by **shot name** — `JobView.shot_name` (added to the helper for
+  this; falls back to `job_id` on an older helper so rows stay distinct rather
+  than collapsing). Status precedence: plate missing → render ready →
+  rendering → in bin → the job's own state. Also hosts **Rescan renders**.
+- **Versions.** Every render of a shot nests under it, newest first. With more
+  than one, a caret expands a per-version list, each with its own **Import**,
+  and the root offers **Import all N** (`doImportAll`, sequential, stops on the
+  first failure). One importable version = a plain **Import**; a still-writing
+  render is excluded from the count and cannot be imported. So a v002/v003 out
+  of one comp is "another version of a shot you recognise", and you can pull in
+  an older version, not just the newest. Pure-function tested (`shots.mjs` /
+  `shots2.mjs` in scratch, 12 cases incl. the no-`shot_name` fallback,
+  newest-first ordering and excluding `writing` renders).
+- **Reset** (was "Hard reset") sits in the panel header, next to the status
+  pills — it is the escape hatch for a wedged queue and shouldn't be two
+  disclosures deep.
+- **Settings** (collapsed, remembered): handles, template, export preset,
+  project mode + `.aep`. Header shows a one-line summary so the values are
+  legible without opening it.
+- **Diagnostics** (collapsed, was "Log"): the MCAPI log plus Pause updates,
+  Probe commands, Try auto-solo. Collapsed header still shows the build stamp
+  and an error count.
+- **Prefix/suffix stay in the main flow**, on the Plate stack next to the plate
+  names they change — per-shot naming is a real editorial need, not just
+  collision avoidance, so it must not be buried in Settings. The plate rows
+  update live as you type.
+- **Not done:** folding analyze+grab into Send. Blocked by manual soloing —
+  Send can only fold in grab+export, so the flow stays "solo → auto-grab →
+  Send" until auto-solo is solved.
+
 ## Renders list, orphaned jobs, hard reset (UI `2026-07-29.1`)
 
 - **`GET /renders`** lists **every** media file in `watch_root` with an
@@ -317,8 +440,19 @@ MCAPI has **no push events**, so the shot readout must poll — and each tick is
   Once a render is in Avid it is in Avid — the editor may have moved the clip
   to another bin, and re-offering it would invite a duplicate import. Use
   `store.forget_imported_renders()` if that ever needs clearing deliberately;
-  `reset()` must not. Tests: `test_renders_listing_and_reset`,
-  `test_imported_renders_survive_helper_restart`.
+  `reset()` must not.
+- **A path is NOT an identity.** Records are keyed by path but validated against
+  the file's **mtime + size** (`Store._stamp`). Deleting a render and
+  re-rendering to the same filename — the normal way to fix a bad temp —
+  produces a different file that has never been imported; keying on the path
+  alone left it reading "in bin" forever with no way to import the replacement.
+  The on-disk format is `{path: {mtime, size}}`; the old bare-list format is
+  migrated on load by adopting each surviving file's current stamp (so existing
+  imports stay imported) and dropping records whose file is gone. A corrupt
+  state file is tolerated — never let it stop the helper booting.
+  Tests: `test_renders_listing_and_reset`,
+  `test_imported_renders_survive_helper_restart`,
+  `test_rerender_to_same_name_is_not_imported`.
 - **Polled lists must not thrash the DOM.** `refreshJobs`/`refreshRenders`
   compare a `sig()` (JSON) of the new list and only reassign on a real change,
   and background polls pass `quiet` so the button never flips to "Reading…".
@@ -367,7 +501,9 @@ MCAPI has **no push events**, so the shot readout must poll — and each tick is
 - **Then: a stack whose tracks have DIFFERENT spans** (V2 shorter than V1), to
   exercise a non-zero `offset_frames` end to end. The math is unit-tested but
   has never been seen in AE.
-- **Horizontal batching** (marked range → one temp per V1 clip → N jobs) — see
+- **Horizontal batching — BUILT (UI `2026-07-29.11`). Enumeration VERIFIED in
+  Avid; grab + send across the range NOT yet.** See the section below.
+- **Horizontal batching (original notes)** — see
   the status note atop `PHASE_MULTIPLATE.md`; needs the marked-range derivation
   rebuilt and verified.
 - **Plan-preview UX (4c):** editable per-plate names before Send.

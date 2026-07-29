@@ -2,7 +2,7 @@
   "name": "aebridge-panel",
   "version": "0.0.1",
   "private": true,
-  "description": "AEBridge — Avid Media Composer <-> After Effects round-trip panel",
+  "description": "AEBridge \u2014 Avid Media Composer <-> After Effects round-trip panel",
   "scripts": {
     "dev": "nuxt --port 3010 --hostname 127.0.0.1",
     "build": "nuxt build",
@@ -13,7 +13,8 @@
     "build:avpi:release": "AEB_RELEASE=1 node build/panel.mjs",
     "build:copy": "node build/copy.mjs --run",
     "lint": "eslint --ext .js,.mjs,.vue --ignore-path .gitignore .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "check:tpl": "node tools/check-vue-template.js src/components/AEBridgePanel.vue"
   },
   "dependencies": {
     "google-protobuf": "^3.21.4",

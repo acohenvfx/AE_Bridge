@@ -182,17 +182,126 @@ export async function getCurrentShot() {
   const [cols, project] = await Promise.all([getMobColumns(seq.mobId), getProjectInfo().catch(() => ({}))])
   const resolution = parseResolution(cols, project)
   const frameRate = parseRate(cols, project)
+  // MARKS ARE READABLE after all — the record sequence's own columns carry
+  // `Mark IN` / `Mark OUT` (CONFIRMED in Avid 2026-07-29). An earlier session
+  // concluded marks were unreachable because GetValues is test-only and
+  // ExportEDL ignores them; nobody checked GetMobInfo's columns.
+  const markIn = pick(cols, ['Mark IN']) || ''
+  const markOut = pick(cols, ['Mark OUT']) || ''
   return {
     mobId: seq.mobId,
     name: pick(cols, ['Name']) || 'sequence',
     startTC: pick(cols, ['Start']),
     playheadTC: seq.currentTimecode,
     playheadFrame: seq.currentFrame,
+    markIn,
+    markOut,
     frameRate,
     dropFrame: project.dropFrame || /;/.test(seq.currentTimecode || ''),
     resolution,
     columns: cols,
   }
+}
+
+// Every V1 clip inside the sequence's marked range — one shot per clip, which
+// is one comp and one job. Each shot also carries its own plate stack (the
+// tracks above it over that clip's span), so a marked range spanning three
+// stacked shots enumerates the whole grid in one pass.
+//
+// Nothing here moves the playhead: `findClipAtPlayhead` is just "the clip at
+// this TC", and CreateSubClip takes an arbitrary `head_frame`, so any clip in
+// the range can be targeted directly.
+export async function analyzeRange({ parseEdl }) {
+  const shot = await getCurrentShot()
+  const fps = 24
+  if (!shot.markIn || !shot.markOut) {
+    throw new Error('No IN/OUT marks on the record sequence. Mark the range you want, then Analyze range.')
+  }
+  const inF = tcToFrames(shot.markIn, fps)
+  const outF = tcToFrames(shot.markOut, fps)
+  // Sequence start, for converting absolute EDL timecodes into the
+  // sequence-relative frames CreateSubClip's head_frame expects.
+  const seqStartF = tcToFrames(shot.startTC || '00:00:00:00', fps)
+  if (!(outF > inF)) {
+    throw new Error('Mark OUT (' + shot.markOut + ') is not after Mark IN (' + shot.markIn + ').')
+  }
+
+  const allTracks = await getMobTrackInfo(shot.mobId)
+  const vids = allTracks
+    .filter((t) => t.type === TRACKTYPE_PICTURE && t.numSegments > 0)
+    .sort((a, b) => a.number - b.number)
+  const v1 = vids.find((t) => t.number === 1)
+  if (!v1) throw new Error('No V1 with content on this sequence')
+
+  // Per-track EDLs once, then reuse for every shot in the range.
+  const edls = {}
+  for (const t of vids) {
+    try {
+      const p = await exportEdlForTrack(shot.mobId, t)
+      edls[t.number] = (p && parseEdl) ? await parseEdl(p) : []
+    } catch (e) {
+      logMcapiVerbose('range: V' + t.number + ' EDL failed', e.message)
+      edls[t.number] = []
+    }
+  }
+
+  // A V1 clip is in range if it OVERLAPS [markIn, markOut) — a range that
+  // starts mid-clip still means the editor wants that shot.
+  const shots = []
+  for (const c of edls[1] || []) {
+    const cIn = tcToFrames(c.rec_in, fps)
+    const cOut = tcToFrames(c.rec_out, fps)
+    if (cOut <= inF || cIn >= outF) continue
+    // Target position, just inside the clip so clip-bounds subclipping resolves
+    // to THIS clip and not a neighbour.
+    //
+    // Two different frame spaces, and mixing them is the trap: EDL timecodes are
+    // ABSOLUTE (01:02:37:02), but CreateSubClip's `head_frame` is relative to the
+    // SEQUENCE START — Avid's own `currentFrame` confirms it (4804 for
+    // 01:03:20:04 on a sequence starting 01:00:00:00). Passing an absolute frame
+    // asks for a position far past the end and Avid answers with the misleading
+    // "Invalid add_frame_at_head: Requested frames not available."
+    // Suffixed names, not a bare `atFrame`: the first version of this mixed the
+    // two spaces and every plate stack came back empty because absolute EDL
+    // frames were compared against a sequence-relative position.
+    const atFrameAbs = Math.min(cIn + 1, cOut - 1)
+    const atFrameSeq = atFrameAbs - seqStartF
+    const stack = []
+    for (const t of vids) {
+      const hit = (edls[t.number] || []).find((x) => {
+        const xIn = tcToFrames(x.rec_in, fps)     // absolute
+        const xOut = tcToFrames(x.rec_out, fps)   // absolute
+        return xIn <= atFrameAbs && atFrameAbs < xOut
+      })
+      if (hit) {
+        stack.push({
+          track: t.number,
+          enabled: t.enabled,
+          clipName: hit.clip_name,
+          recIn: hit.rec_in,
+          recOut: hit.rec_out,
+        })
+      }
+    }
+    shots.push({
+      atFrame: atFrameSeq,                // sequence-relative — for head_frame
+      atTC: framesToTc(atFrameAbs, fps),  // absolute — for EDL lookup
+      clipName: c.clip_name,
+      recIn: c.rec_in,
+      recOut: c.rec_out,
+      stack,
+    })
+  }
+
+  logMcapiVerbose('marked range', {
+    markIn: shot.markIn, markOut: shot.markOut,
+    seqStartTC: shot.startTC, seqStartFrame: seqStartF,
+    shots: shots.map((s) => ({ at: s.atTC, frame: s.atFrame, clip: s.clipName, plates: s.stack.map((p) => 'V' + p.track) })),
+  })
+  if (!shots.length) {
+    throw new Error('No V1 clips inside ' + shot.markIn + '–' + shot.markOut + '.')
+  }
+  return { shot, shots }
 }
 
 // --- bin listing (to recover the subclip mob id) ---------------------------
@@ -418,31 +527,51 @@ function durFrames(cols, fps) {
 // Extend a subclip by handles, dropping ONLY the edge the error names (so we
 // never guess a tail-only extension that could return the wrong range). A
 // rejected CreateSubClip creates no mob, so only the success makes a clip.
+// Add source handles, degrading deterministically when the source media does
+// not have them. Different clips on the same track hit different source
+// positions, so one shot can have handles at both edges and its neighbour none.
+//
+// The ladder is explicit rather than parsed out of Avid's error text: an earlier
+// message-driven version could dead-end (Avid reports `add_frame_at_head` even
+// once head is 0) and throw, failing the whole grab over a missing handle.
+// Handle availability must NEVER fail a grab — a plate with no handles is
+// still a usable plate.
 async function extendWithHandles({ mobId, binPath, handles }) {
   const h = Math.max(0, Number(handles) || 0)
-  let head = h
-  let end = h
-  for (let i = 0; i < 4; i += 1) {
+  const ladder = h > 0
+    ? [[h, h], [0, h], [h, 0], [0, 0]]  // both, tail-only, head-only, exact
+    : [[0, 0]]
+  let lastError = null
+  for (const [head, end] of ladder) {
     try {
       const items = await createRawSubclip({
         mobId, binPath, useMarks: false, useClipBounds: true, trackList: null,
         addFramesHead: head, addFramesEnd: end,
       })
       if (items.length) {
-        logMcapiVerbose('handles applied', { requested: h, head, end })
+        if (head !== h || end !== h) {
+          logMcapiVerbose('handles clamped by available source media', { requested: h, head, end })
+        } else {
+          logMcapiVerbose('handles applied', { requested: h, head, end })
+        }
         return { items, head, end }
       }
       return { items: [], head: 0, end: 0 }
     } catch (e) {
-      if (!handlesUnavailable(e)) throw e
-      const msg = String((e && e.message) || e).toLowerCase()
-      if (/at_end/.test(msg) && end > 0) { end = 0 }
-      else if (/at_head/.test(msg) && head > 0) { head = 0 }
-      else if (head > 0 || end > 0) { head = 0; end = 0 }
-      else throw e
-      logMcapiVerbose('handle edge unavailable, reducing', { head, end, err: e.message })
+      // Step down on ANY failure, not just recognised handle errors — the whole
+      // point of the ladder is that [0,0] always works, and misreading one
+      // error message must not cost the grab.
+      logMcapiVerbose(
+        'subclip failed at handles [' + head + ',' + end + '], stepping down' +
+        (handlesUnavailable(e) ? '' : ' (UNRECOGNISED error — note the wording)'),
+        e.message
+      )
+      lastError = e
     }
   }
+  // Every rung refused, including no handles at all. Caller falls back to the
+  // exact subclip it already holds.
+  logMcapiVerboseError('every subclip attempt failed — caller will use the exact clip', lastError || new Error('no items returned'))
   return { items: [], head: 0, end: 0 }
 }
 
@@ -450,7 +579,7 @@ async function extendWithHandles({ mobId, binPath, handles }) {
 // (ExportEDL honors track_list — confirmed). Avid can only isolate a track on
 // export via enabled_tracks_only, so the track must be enabled.
 // Returns { track, target, fps, allTracks }.
-async function chooseTrackAndTarget({ sequenceMobId, playheadTC, parseEdl, trackNumber = 1 }) {
+async function chooseTrackAndTarget({ sequenceMobId, atTC, parseEdl, trackNumber = 1 }) {
   const allTracks = await getMobTrackInfo(sequenceMobId)
   logMcapiVerbose('track info', allTracks)
   const label = 'V' + trackNumber
@@ -464,11 +593,11 @@ async function chooseTrackAndTarget({ sequenceMobId, playheadTC, parseEdl, track
   const edlPath = await exportEdlForTrack(sequenceMobId, track)
   const clips = (edlPath && parseEdl) ? await parseEdl(edlPath) : []
   logMcapiVerbose(label + ' EDL clips', { count: clips.length, numSegments: track.numSegments, clips: clips.map((c) => ({ n: c.clip_name, in: c.rec_in, out: c.rec_out })) })
-  const target = findClipAtPlayhead(clips, playheadTC, fps)
+  const target = findClipAtPlayhead(clips, atTC, fps)
   if (!target) {
-    throw new Error('No ' + label + ' clip under the playhead (' + playheadTC + '). Park on the shot first.')
+    throw new Error('No ' + label + ' clip at ' + atTC + '. Park on the shot first.')
   }
-  logMcapiVerbose('playhead clip', { playheadTC, clip: target.clip_name, rec_in: target.rec_in, rec_out: target.rec_out, src_in: target.src_in, src_out: target.src_out })
+  logMcapiVerbose('target clip', { atTC, clip: target.clip_name, rec_in: target.rec_in, rec_out: target.rec_out, src_in: target.src_in, src_out: target.src_out })
   return { track, target, fps, allTracks }
 }
 
@@ -510,12 +639,12 @@ export async function analyzeStack({ parseEdl }) {
   return { shot, stack }
 }
 
-async function grabSourceHandledMob({ sequenceMobId, playheadTC, playheadFrame, parseEdl, destBinPath, handles, trackNumber = 1, scratchBin = 'AEBridge_Scratch' }) {
+async function grabSourceHandledMob({ sequenceMobId, atTC, atFrame, parseEdl, destBinPath, handles, trackNumber = 1, scratchBin = 'AEBridge_Scratch' }) {
   await ensureBin(destBinPath)
   const destPath = await resolveBinPath(destBinPath)
   await ensureBin(scratchBin)
   const scratchPath = await resolveBinPath(scratchBin)
-  const { track, target, fps, allTracks } = await chooseTrackAndTarget({ sequenceMobId, playheadTC, parseEdl, trackNumber })
+  const { track, target, fps, allTracks } = await chooseTrackAndTarget({ sequenceMobId, atTC, parseEdl, trackNumber })
   const wantTrack = 'V' + track.number
 
   // ISOLATION GUARD. CreateSubClip does NOT fan one subclip per enabled track
@@ -533,7 +662,7 @@ async function grabSourceHandledMob({ sequenceMobId, playheadTC, playheadFrame, 
     try {
       const p = await exportEdlForTrack(sequenceMobId, t)
       const cl = (p && parseEdl) ? await parseEdl(p) : []
-      const c = findClipAtPlayhead(cl, playheadTC, fps)
+      const c = findClipAtPlayhead(cl, atTC, fps)
       // numSegments tells us how many clips this track really has. If the EDL
       // came back with a wildly different count, ExportEDL did NOT isolate the
       // track (or we read a stale file) and this check cannot be trusted.
@@ -554,7 +683,7 @@ async function grabSourceHandledMob({ sequenceMobId, playheadTC, playheadFrame, 
   if (conflicts.length) {
     throw new Error(
       'Enable ONLY ' + wantTrack + ' to grab this plate — ' + conflicts.join(', ') +
-      ' also has a clip under the playhead, and Avid would export ' + wantTrack +
+      ' also has a clip there, and Avid would export ' + wantTrack +
       ' flattened with it. Disable ' + conflicts.join(', ') + ', then grab again ' +
       '(each track is grabbed in its own pass).'
     )
@@ -567,7 +696,19 @@ async function grabSourceHandledMob({ sequenceMobId, playheadTC, playheadFrame, 
   // isolated plate. The loop below is kept because MC can still return more
   // than one subclip (e.g. one per source clip); a stack is built by grabbing
   // each track in its own pass, not from this call.
-  const headFrame = Number.isInteger(playheadFrame) ? playheadFrame : tcToFrames(playheadTC, fps)
+  const headFrame = Number.isInteger(atFrame) ? atFrame : tcToFrames(atTC, fps)
+  // head_frame is SEQUENCE-RELATIVE. An absolute TC frame (e.g. 90170 for
+  // 01:02:37:02) sails past the end and Avid reports it as
+  // "Invalid add_frame_at_head: Requested frames not available." — which sent
+  // this hunt off after the handle code twice. Catch it here with a message
+  // that says what is actually wrong.
+  const seqDur = Number(pick(await getMobColumns(sequenceMobId).catch(() => ({})), ['Frame Count Duration'])) || 0
+  if (headFrame < 0 || (seqDur && headFrame >= seqDur)) {
+    throw new Error(
+      'Internal: head_frame ' + headFrame + ' is outside the sequence (0–' + (seqDur || '?') +
+      '). head_frame must be relative to the sequence start, not an absolute timecode frame.'
+    )
+  }
   logMcapiVerbose('grab step1 (isolated by enable state)', { headFrame, clip: target.clip_name })
   const aItems = await createRawSubclip({
     mobId: sequenceMobId, binPath: scratchPath, useMarks: false, useClipBounds: true,
@@ -595,7 +736,21 @@ async function grabSourceHandledMob({ sequenceMobId, playheadTC, playheadFrame, 
   // Step 2 — extend by handles into the working bin, with the START+END
   // position sanity check; on mismatch fall back to the exact (no-handle)
   // scratch subclip, whose range is guaranteed correct.
-  const { items: bItems, head, end } = await extendWithHandles({ mobId: a.mobId, binPath: destPath, handles })
+  // Handles are BEST-EFFORT BY DEFINITION. No failure in here may fail the
+  // grab: whatever goes wrong, the exact subclip from step 1 is already a
+  // correct plate. Matching on Avid's error wording proved fragile (see the
+  // ladder), so this catches everything rather than trusting a regex.
+  let bItems = []
+  let head = 0
+  let end = 0
+  try {
+    const ext = await extendWithHandles({ mobId: a.mobId, binPath: destPath, handles })
+    bItems = ext.items
+    head = ext.head
+    end = ext.end
+  } catch (e) {
+    logMcapiVerboseError('handles failed outright — exporting the exact clip instead', e)
+  }
   let exportMob = a
   let created = [a]
   let headH = 0
@@ -622,7 +777,10 @@ async function grabSourceHandledMob({ sequenceMobId, playheadTC, playheadFrame, 
       logMcapiVerbose('handled subclip wrong range — using exact (no handles)', {})
     }
   } else {
-    throw new Error('source-handle step 2 produced no subclip in ' + destPath)
+    // No handled subclip at all (the source has no spare frames at either
+    // edge). The exact scratch subclip is already correct — export that rather
+    // than failing the grab over missing handles.
+    logMcapiVerbose('no handled subclip — exporting the exact clip with 0 handles', { mob: a.mobName })
   }
 
   return { exportMob, created, headHandles: headH, endHandles: endH, target, track, fps }
@@ -742,11 +900,15 @@ export async function importReturn({ filePath, destBinPath, importSettingsName =
 // a track), each call requiring that track to be the only enabled video track
 // over the shot. `baseName` carries V1's marker name to the upper passes so
 // every plate in a stack shares one base.
-export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trackNumber = 1, baseName = '' }) {
+export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trackNumber = 1, baseName = '', atTC = '', atFrame = null }) {
   const shot = await getCurrentShot()
+  // Default to the playhead; a range grab passes the target clip's position so
+  // several shots can be grabbed without the editor moving anything.
+  const tc = atTC || shot.playheadTC
+  const frame = Number.isInteger(atFrame) ? atFrame : shot.playheadFrame
   // Grab the clip under the playhead from its SOURCE master (handles from the
   // source's own media, never the sequence timeline).
-  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, playheadTC: shot.playheadTC, playheadFrame: shot.playheadFrame, parseEdl, destBinPath, handles, trackNumber })
+  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, atTC: tc, atFrame: frame, parseEdl, destBinPath, handles, trackNumber })
   const sequence = r.exportMob
   const created = r.created
 
@@ -774,7 +936,7 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trac
       })
       // Multiple markers can sit in one clip's span — prefer the one nearest the
       // playhead (that's the shot the editor parked on), not the earliest.
-      const phF = Number.isInteger(shot.playheadFrame) ? shot.playheadFrame : null
+      const phF = Number.isInteger(frame) ? frame : null
       const chosen = (phF != null && within.length > 1)
         ? [within.slice().sort((a, b) => Math.abs((a.offset || 0) - phF) - Math.abs((b.offset || 0) - phF))[0]]
         : within
@@ -828,7 +990,7 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trac
     shot: {
       shot_name: name,
       sequence_name: shot.name,
-      record_tc_in: startTC || shot.playheadTC,
+      record_tc_in: startTC || tc,
       record_tc_out: endTC || '',
       source_tc_in: startTC || '',
       frame_rate: shot.frameRate,
@@ -1098,4 +1260,16 @@ function tcToFrames(tc, fps) {
   if (p.length < 4 || p.some(isNaN)) return 0
   const [hh, mm, ss, ff] = p
   return ((hh * 60 + mm) * 60 + ss) * fps + ff
+}
+
+// Inverse of tcToFrames (non-drop; TC labels at round(fps)).
+function framesToTc(frames, fps) {
+  const f = Math.max(0, Math.round(frames))
+  const ff = f % fps
+  const totalSec = Math.floor(f / fps)
+  const ss = totalSec % 60
+  const mm = Math.floor(totalSec / 60) % 60
+  const hh = Math.floor(totalSec / 3600)
+  const p2 = (n) => String(n).padStart(2, '0')
+  return p2(hh) + ':' + p2(mm) + ':' + p2(ss) + ':' + p2(ff)
 }

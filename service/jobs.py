@@ -74,6 +74,8 @@ class Job:
             job_id=self.job_id,
             state=self.state,
             project_mode=self.project_mode,
+            shot_name=self.sidecar.shot_name if self.sidecar else None,
+            render_stem=self.render_stem,
             reference_path=str(self.reference_path) if self.reference_path else None,
             sidecar_path=str(self.sidecar_path) if self.sidecar_path else None,
             aep_path=str(self.aep_path) if self.aep_path else None,
@@ -107,7 +109,12 @@ class Store:
         # restart: once a render is in Avid it stays in Avid, and the editor may
         # well have moved the clip to another bin. Re-offering it as "new" would
         # invite a duplicate import.
-        self._imported_renders: set[str] = self._load_imported()
+        #
+        # Keyed by path BUT validated against the file's mtime+size, because a
+        # path is not an identity: deleting a render and re-rendering to the same
+        # name produces a DIFFERENT file that has never been imported. Recording
+        # the path alone made those show as "in bin" forever.
+        self._imported_renders: dict[str, dict] = self._load_imported()
 
     # --- imported renders ---
     def _imported_file(self) -> Path:
@@ -115,30 +122,62 @@ class Store:
 
         return settings.roots.base / "imported_renders.json"
 
-    def _load_imported(self) -> set[str]:
+    @staticmethod
+    def _stamp(path: Path) -> Optional[dict]:
+        try:
+            st = path.stat()
+            # Round mtime: it survives a JSON round-trip and float equality on
+            # raw st_mtime is fragile across filesystems.
+            return {"mtime": round(st.st_mtime, 3), "size": st.st_size}
+        except OSError:
+            return None
+
+    def _load_imported(self) -> dict[str, dict]:
         try:
             p = self._imported_file()
-            if p.exists():
-                return set(json.loads(p.read_text()))
+            if not p.exists():
+                return {}
+            raw = json.loads(p.read_text())
+            if isinstance(raw, dict):
+                return {k: v for k, v in raw.items() if isinstance(v, dict)}
+            # Migrate the old format (a bare list of paths): adopt each file's
+            # CURRENT stamp so previously-imported renders stay imported.
+            out: dict[str, dict] = {}
+            for s in raw or []:
+                stamp = self._stamp(Path(s))
+                if stamp:
+                    out[str(s)] = stamp
+            return out
         except Exception:
             pass  # corrupt/unreadable state must never stop the helper booting
-        return set()
+        return {}
 
     def _save_imported(self) -> None:
         try:
             p = self._imported_file()
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps(sorted(self._imported_renders), indent=2))
+            p.write_text(json.dumps(self._imported_renders, indent=2, sort_keys=True))
         except Exception:
             pass  # best effort; losing this only re-offers an import
 
     def mark_render_imported(self, path: Path) -> None:
+        stamp = self._stamp(path)
+        if stamp is None:
+            return
         with self._lock:
-            self._imported_renders.add(str(path))
+            self._imported_renders[str(path)] = stamp
         self._save_imported()
 
     def is_render_imported(self, path: Path) -> bool:
-        return str(path) in self._imported_renders
+        """True only if THIS file — same path, same mtime and size — was imported.
+        A re-render to the same name is a new file and reports False."""
+        rec = self._imported_renders.get(str(path))
+        if not rec:
+            return False
+        now = self._stamp(path)
+        if now is None:
+            return False
+        return rec.get("mtime") == now["mtime"] and rec.get("size") == now["size"]
 
     def forget_imported_renders(self) -> None:
         """Explicitly clear the import history. NOT part of a hard reset."""

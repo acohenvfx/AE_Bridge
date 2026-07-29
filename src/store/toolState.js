@@ -32,6 +32,10 @@ export const aebridge = Vue.observable({
   // track and it isolates exactly one per grab.
   stack: [],
   stackTC: '',
+  // Horizontal batch: the sequence's marked range split into one shot per V1
+  // clip, each with its own plate stack. Read-only plan for now.
+  range: null,
+  rangeAnalyzing: false,
   grabbed: [],
   baseName: '',
   stackShot: null,
@@ -41,9 +45,14 @@ export const aebridge = Vue.observable({
   // HANDOFF), so soloing is manual — and watching for it is strictly better
   // than making the user come back to the panel between each track.
   autoGrab: true,
-  // The log is a diagnostic surface, not part of the normal flow — collapsed by
-  // default, and the choice is remembered.
-  logOpen: false,
+  // Open by default while the round trip is still being debugged — the log is
+  // how Avid-side problems get diagnosed, and a collapsed one costs a round
+  // trip every time something fails. The choice is still remembered once the
+  // user collapses it. Revisit for a consumer build.
+  logOpen: true,
+  // Set-once preferences (handles, export preset, project mode) — collapsed by
+  // default so they don't compete with the per-shot flow.
+  settingsOpen: false,
   // Hard stop on the shot poll. MCAPI has no push events so the readout needs
   // polling, but the editor should be able to silence it outright.
   pollPaused: false,
