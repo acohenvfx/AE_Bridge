@@ -1,22 +1,24 @@
 # Phase: Multi-plate / multi-track
 
-> **2026-07-28 status — the one-call plate stack is REFUTED in Avid.**
-> There is no per-track fan: with V1+V2 enabled, `CreateSubClip` +
-> `enabled_tracks_only` returns ONE subclip of the **composite**, labelled `V1`,
-> and exporting it gives V2's picture. The `Tracks` column cannot be trusted.
-> See the corrected fact in `HANDOFF.md`. All mechanics below that assume
-> `CreateSubClip(track_list=…)` or a per-track fan are **obsolete**.
+> **2026-07-29: PHASE COMPLETE — verified in Avid.** Both dimensions work:
 >
-> - **Vertical (stack at the playhead)** — BUILT as a **guided multi-pass grab**
->   (UI `.9`, pending Avid verification). Only the enable state isolates, and it
->   isolates one track per grab, so the panel enumerates the stack
->   (`analyzeStack`), then walks the user one track per pass ("enable only V2 →
->   Grab V2"), refusing any grab that would flatten. Send ships the collected
->   `plates[]` and AE builds the layered comp. Note the panel can READ track
->   enable state (`getMobTrackInfo`) but cannot set it — hence the manual step.
-> - **Horizontal (marked range → one temp per V1 clip)** — NOT built; the
->   marked-range derivation below must be rebuilt on the playhead-based
->   pipeline and verified in Avid.
+> - **Vertical (stack at the playhead)** — one plate per video track over the
+>   shot, layered into one comp with per-plate `startTime` (confirmed with
+>   different-span tracks, so real offsets). Soloing is MANUAL: `CreateSubClip`
+>   isolates only via `enabled_tracks_only`, and no write path to track enable
+>   exists — `DoCommand` on the `Tracks` commands is accepted but does not move
+>   it. **Auto-grab** watches the enable state and grabs each plate as its track
+>   is soloed, so the editor never leaves the timeline.
+> - **Horizontal (marked range → one temp per V1 clip)** — `Mark IN`/`Mark OUT`
+>   ARE readable, from the sequence's mob columns. `analyzeRange()` enumerates
+>   one shot per V1 clip overlapping the range, each with its own stack. Soloing
+>   is per TRACK, not per shot (**Grab V<n> for all shots**), so N shots × M
+>   tracks costs only M solos; one Send fans out to N jobs.
+>
+> Mechanics below that assume `CreateSubClip(track_list=…)`, a per-track fan, or
+> unreadable marks are **obsolete** — `HANDOFF.md` has what actually holds. Note
+> also the two frame spaces: `head_frame` is sequence-relative while EDL
+> timecodes are absolute.
 
 ## Goal
 
@@ -85,11 +87,19 @@ imports independently.
   batch Send.
 - Per-plate / per-job progress and job rows.
 
-## Marks are not readable (confirmed) → how we filter to the range
+## ~~Marks are not readable (confirmed)~~ — WRONG. Superseded.
 
-MCAPI does **not** expose the sequence mark IN/OUT in record TC (`GetValues` is
-test-only; no marks key), and `ExportEDL` ignores marks — it dumps the whole
-track. So to limit enumeration to the marked range we derive it indirectly:
+**Marks ARE readable**: the record sequence's `GetMobInfo` columns include
+`Mark IN`, `Mark OUT` and `IN-OUT`. `analyzeRange()` uses them directly and the
+indirect derivation below was never needed. What is true: `GetValues` is
+test-only and `ExportEDL` ignores marks — but nobody checked the mob columns,
+and "confirmed" here meant "we tried two other things".
+
+Kept as a caution: **three** claims in these docs turned out false the same way
+(no per-track fan; `DoCommand` denied; marks unreadable). Retest before trusting
+a "can't be done".
+
+The obsolete indirect derivation:
 
 1. `CreateSubClip(use_marks_bounds, create_new_sequence=false, track_list=[V1])`
    — MC applies the marks internally and makes a subclip **per V1 clip in the

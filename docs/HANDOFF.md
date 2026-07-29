@@ -480,36 +480,25 @@ controls moved from *always visible* to *visible when relevant*.
 - **730 commands are now reachable** — worth a read-through of the list for
   other things AEBridge does by hand today. `Timeline/Mixdown → Video…` (1937)
   in particular might offer a different route to a flattened plate.
-- **Consumer-simplification pass (agreed, not built):** one Send button doing
-  analyze → grab → export → launch; Jobs + Renders merged into one **Shots**
-  list with versions nested; set-once settings behind a disclosure; build pill,
-  log, probe, pause, hard reset behind **Diagnostics**. Prefix/suffix **stay**,
-  moved onto the shot card beside the resulting plate name (per-shot naming is
-  a real editorial need, not just collision avoidance). NOTE: one-button Send
-  can only fold in the *grab*, not the soloing, while auto-solo is parked.
-- **Verify the guided stack grab in Avid.** Test sequence `DE_DEMO_NEW`, playhead
-  `01:03:03:01`: V1+V2+V3 all carry a clip over `01:03:03:01 → 01:03:20:04`
-  (identical spans, so all offsets should compute to **0**). Sequence: Analyze →
-  enable only V1 → Grab V1 → enable only V2 → Grab V2 → V3 → Send. Check the
-  comp gets 3 correctly-stacked layers and the plate names are
-  `<marker>` / `_pl02` / `_pl03`.
+- **Consumer-simplification pass — DONE** (see the panel-layout section):
+  Shots list, Settings/Diagnostics disclosures, prefix/suffix kept in the main
+  flow. NOT done: folding analyze+grab into one Send button — while auto-solo is
+  parked, Send can only absorb grab+export, not the soloing.
 - **UNKNOWN: does `ExportEDL` report a DISABLED track?** Analyze is meant to run
   with tracks in their normal (enabled) state; mid-stack the user has tracks
   off. Re-Analyze unions with the existing plan so this can't drop pending
   plates, but the answer is worth pinning down — if disabled tracks *are*
   reported, Analyze can be re-run freely at any point.
-- **Then: a stack whose tracks have DIFFERENT spans** (V2 shorter than V1), to
-  exercise a non-zero `offset_frames` end to end. The math is unit-tested but
-  has never been seen in AE.
-- **Horizontal batching — BUILT (UI `2026-07-29.11`). Enumeration VERIFIED in
-  Avid; grab + send across the range NOT yet.** See the section below.
-- **Horizontal batching (original notes)** — see
-  the status note atop `PHASE_MULTIPLATE.md`; needs the marked-range derivation
-  rebuilt and verified.
-- **Plan-preview UX (4c):** editable per-plate names before Send.
 - **Scratch-bin cleanup** — subclips accumulate in `AEBridge_Scratch` (no delete
-  API). Investigate a safe cleanup path.
-- Return-side validation (`ffprobe` rate/res/frame-count) is stubbed.
+  API), now several per shot per track, so a range batch fills it fast. This is
+  the most likely next annoyance in daily use.
+- **Return-side validation (`ffprobe` rate/res/frame-count) is stubbed** — the
+  sidecar records the expected numbers but nothing checks the render against
+  them. The guardrail against silently cutting in a wrong-rate temp.
+- **Plan-preview UX (4c):** editable per-plate names before Send.
+- **Duplicate clips after a re-render.** Importing a re-rendered version adds a
+  second clip to the bin beside the first (correct — different media), but Avid
+  has no delete-mob API so the panel can't tidy the stale one.
 
 ## Git / gotchas
 
