@@ -15,6 +15,9 @@ from typing import Optional
 # Media containers MC's ExportFile might produce for a reference movie.
 _MEDIA_EXTS = {".mov", ".mxf", ".mp4", ".m4v", ".avi", ".mkv"}
 
+# A render touched more recently than this is assumed to still be growing.
+_RENDER_SETTLE_SECS = 4.0
+
 
 def _newest_media(claimed: Path, job_export_dir: Path) -> Optional[Path]:
     if claimed.exists() and claimed.stat().st_size > 0:
@@ -86,6 +89,8 @@ from ..models import (
     PrepareRequest,
     PrepareResponse,
     ProjectMode,
+    RenderFile,
+    RenderImportedRequest,
     SendRequest,
     Sidecar,
     TemplateInfo,
@@ -369,6 +374,8 @@ def send(req: SendRequest) -> JobView:
     job.sidecar_path = sidecar_path
     job.aep_path = aep_path
     job.sidecar = sidecar
+    # Remember every plate file so the job can report when they're deleted.
+    job.plate_paths = [Path(p.file) for p in plates] if plates else [ref_path]
 
     # Actually launch After Effects with the comp so the editor can work.
     try:
@@ -394,6 +401,70 @@ def clear_jobs(all: bool = False) -> dict:
     all=true to clear everything (in-flight jobs keep their watch state)."""
     removed = store.clear_jobs(only_finished=not all)
     return {"removed": removed}
+
+
+@router.post("/reset")
+def hard_reset() -> dict:
+    """Hard reset: drop every job regardless of state, and forget which renders
+    have been imported. Files on disk are NOT touched — plates and renders stay
+    put, so anything still wanted can be re-imported from the Renders list.
+
+    This is the escape hatch for a queue stuck on jobs nobody is working on."""
+    removed = store.reset()
+    return {"removed": removed}
+
+
+@router.get("/renders", response_model=list[RenderFile])
+def list_renders() -> list[RenderFile]:
+    """Everything in the shared render folder.
+
+    The watcher only ever matches ONE render per job, so a second or third
+    version out of the same comp would otherwise go unnoticed. Listing the
+    folder surfaces every render and flags what has not been imported yet.
+    """
+    root = settings.roots.watch_root
+    if not root.exists():
+        return []
+    # Map render_stem -> job so a file can name the job it came from.
+    by_stem = {j.render_stem: j for j in store.all() if j.render_stem}
+    now = time.time()
+    out: list[RenderFile] = []
+    for p in sorted(root.glob("*"), key=lambda x: x.stat().st_mtime if x.exists() else 0, reverse=True):
+        if not (p.is_file() and p.suffix.lower() in _MEDIA_EXTS):
+            continue
+        st = p.stat()
+        if st.st_size <= 0:
+            continue
+        job = next((j for stem, j in by_stem.items() if p.stem == stem or p.stem.startswith(stem)), None)
+        writing = (now - st.st_mtime) < _RENDER_SETTLE_SECS
+        out.append(
+            RenderFile(
+                name=p.name,
+                path=str(p),
+                # A file still being written reports a size that changes on
+                # every scan; report 0 so the row stops jittering.
+                size=0 if writing else st.st_size,
+                modified=st.st_mtime,
+                job_id=job.job_id if job else None,
+                imported=store.is_render_imported(p),
+                writing=writing,
+            )
+        )
+    return out
+
+
+@router.post("/renders/imported")
+def mark_render_imported(req: RenderImportedRequest) -> dict:
+    """Record that the panel imported this render file into Avid."""
+    path = Path(req.path)
+    try:
+        ensure_within(path, [settings.roots.watch_root])
+    except PathNotAllowed as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="render not found")
+    store.mark_render_imported(path)
+    return {"ok": True, "path": str(path)}
 
 
 @router.get("/jobs/{job_id}", response_model=JobView)

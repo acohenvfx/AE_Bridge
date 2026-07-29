@@ -34,6 +34,10 @@ import {
   GetMarkersRequestBody,
   GetListOfCommandsRequest,
   GetListOfCommandsRequestBody,
+  DoCommandRequest,
+  DoCommandRequestBody,
+  IsCommandsEnabledRequest,
+  IsCommandsEnabledRequestBody,
   SetMobInfoRequest,
   SetMobInfoRequestBody,
   ColumnInfo,
@@ -881,10 +885,204 @@ export async function probeCommands() {
   // the whole reason for the probe.
   const trackish = cmds.filter((c) =>
     /track|video|select|enable|solo|v\d/i.test(c.name + ' ' + c.category))
+  // If track commands turn out to need the timeline focused, the fix is to
+  // activate it first — so surface anything that looks like a window/focus
+  // command alongside the track ones.
+  const windowish = cmds.filter((c) =>
+    /^Windows/i.test(c.category) || /timeline|window|focus|activate/i.test(c.name))
   logMcapiVerbose('commands: total', cmds.length)
   logMcapiVerbose('commands: categories', Array.from(new Set(cmds.map((c) => c.category))).join(', '))
   logMcapiVerbose('commands: track-related', trackish)
-  return { commands: cmds, trackRelated: trackish }
+  logMcapiVerbose('commands: window/focus candidates', windowish)
+  return { commands: cmds, trackRelated: trackish, windowRelated: windowish }
+}
+
+// --- driving Avid commands -------------------------------------------------
+// CONFIRMED 2026-07-28: with `avid.mediacomposer.command` declared, the panel
+// gets 730 commands, including a **Tracks** category with one entry per track
+// (`V1`…`V24`, `A1`…`A24`). Those are the timeline track-selector buttons, so
+// the panel CAN toggle track enable after all — which is what makes the plate
+// stack grabbable without the user touching the timeline.
+//
+// The ids are NOT sequential (V1=6231, V2=6230, V3=6176 …), so never hardcode
+// them: look them up by name at runtime. Cached per session.
+let _trackCommandMap = null
+
+export async function getTrackCommandMap() {
+  if (_trackCommandMap) return _trackCommandMap
+  const { commands } = await probeCommands()
+  const map = {}
+  for (const c of commands) {
+    if (c.category === 'Tracks' && /^[VA]\d+$/.test(c.name)) map[c.name] = c.id
+  }
+  logMcapiVerbose('track command map', map)
+  _trackCommandMap = map
+  return map
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+// Avid runs ONE command at a time. DoCommand returns before the command has
+// finished, so firing two back to back gets:
+//   code=2 {"ErrorMessage":"Can't start more than one command on time.","ErrorType":73}
+// That is a BUSY signal, not a refusal — the same "RPC returns early" trap as
+// ExportFile. Back off and retry.
+function isCommandBusy(e) {
+  const m = String((e && e.message) || '')
+  return /more than one command/i.test(m) || /"ErrorType":\s*73/.test(m)
+}
+
+export async function doCommand(commandId, { retries = 10, waitMs = 200 } = {}) {
+  const client = requireClient()
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const req = new DoCommandRequest()
+      const body = new DoCommandRequestBody()
+      body.setCommandid(commandId) // NB: generated setter is setCommandid
+      req.setBody(body)
+      await callUnary(client, 'doCommand', req, getAccessTokenMetadata())
+      return
+    } catch (e) {
+      if (attempt >= retries || !isCommandBusy(e)) throw e
+      const wait = waitMs * (attempt + 1) // linear backoff
+      logMcapiVerbose('command busy, retrying', { commandId, attempt: attempt + 1, wait })
+      await sleep(wait)
+    }
+  }
+}
+
+// Is Avid currently willing to run these commands? A command that is greyed
+// out (wrong window focused, no timeline active) reports enable=false — which
+// distinguishes "Avid refused" from "Avid ran it but nothing moved".
+export async function isCommandEnabled(commandIds) {
+  const client = requireClient()
+  const req = new IsCommandsEnabledRequest()
+  const body = new IsCommandsEnabledRequestBody()
+  body.setCommandsidList(commandIds)
+  req.setBody(body)
+  const res = await callUnary(client, 'isCommandsEnabled', req, getAccessTokenMetadata())
+  const b = res && res.getBody ? res.getBody() : null
+  const list = b && b.getCommandsList ? b.getCommandsList() : []
+  const out = {}
+  for (const c of list) {
+    out[c.getCommandid ? c.getCommandid() : '?'] = c.getEnable ? !!c.getEnable() : null
+  }
+  return out
+}
+
+// Compact record of one track's full state — `enabled` is what export uses,
+// but a Tracks command might be moving `selected` or `monitored` instead, and
+// only a full before/after tells us which.
+function trackSnapshot(tracks, trackNumber) {
+  const t = (tracks || []).find((x) => x.type === TRACKTYPE_PICTURE && x.number === trackNumber)
+  if (!t) return null
+  return { enabled: !!t.enabled, selected: !!t.selected, monitored: !!t.monitored }
+}
+
+// Wait until a track's enable state actually reflects what we asked for.
+// Doing this between toggles paces the commands (so Avid is never asked to
+// start a second one mid-flight) AND verifies each step really landed.
+async function waitForTrackEnabled(sequenceMobId, trackNumber, want, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs
+  let last = null
+  while (Date.now() < deadline) {
+    last = await getMobTrackInfo(sequenceMobId)
+    const t = last.find((x) => x.type === TRACKTYPE_PICTURE && x.number === trackNumber)
+    if (t && !!t.enabled === !!want) return last
+    await sleep(120)
+  }
+  return null
+}
+
+// Enable exactly `trackNumber` among `stackTracks`, leaving every other track
+// alone. The Tracks commands are TOGGLES, not setters, so we read the current
+// state and flip only what differs — then RE-READ to verify, because a wrong
+// enable state silently produces a flattened plate.
+export async function soloVideoTrack({ sequenceMobId, trackNumber, stackTracks }) {
+  const map = await getTrackCommandMap()
+  const scope = (stackTracks && stackTracks.length) ? stackTracks : [trackNumber]
+  const before = await getMobTrackInfo(sequenceMobId)
+  let before0 = before // reused for the first toggle's before/after diff
+  const toggles = []
+  for (const t of before) {
+    if (t.type !== TRACKTYPE_PICTURE || !scope.includes(t.number)) continue
+    const want = t.number === trackNumber
+    if (!!t.enabled === want) continue
+    const id = map['V' + t.number]
+    if (id == null) {
+      throw new Error('Avid exposes no "V' + t.number + '" track command, so it cannot be toggled automatically. Solo it by hand, or turn off Auto-solo.')
+    }
+    toggles.push({ track: t.number, id })
+  }
+  logMcapiVerbose('solo V' + trackNumber, { toggling: toggles.map((x) => 'V' + x.track) })
+  // One at a time, each confirmed before the next — Avid refuses a second
+  // command while the first is still running.
+  for (const x of toggles) {
+    const want = x.track === trackNumber
+    // Ask Avid whether it will even run this before blaming the result.
+    let enabledMap = {}
+    try {
+      enabledMap = await isCommandEnabled([x.id])
+    } catch (e) {
+      logMcapiVerbose('isCommandsEnabled failed', e.message)
+    }
+    const before = trackSnapshot(before0 || (await getMobTrackInfo(sequenceMobId)), x.track)
+    logMcapiVerbose('toggle V' + x.track, { id: x.id, want, commandEnabled: enabledMap[x.id], before })
+
+    await doCommand(x.id)
+
+    const ok = await waitForTrackEnabled(sequenceMobId, x.track, want)
+    if (!ok) {
+      // Log the FULL state so we can tell a no-op from a command that moved a
+      // DIFFERENT field (selected/monitored) than the one export reads.
+      const after = trackSnapshot(await getMobTrackInfo(sequenceMobId), x.track)
+      const moved = before && after
+        ? Object.keys(after).filter((k) => after[k] !== before[k])
+        : []
+      logMcapiVerbose('toggle V' + x.track + ' DID NOT TAKE', {
+        commandEnabled: enabledMap[x.id], before, after, fieldsThatMoved: moved,
+      })
+      throw new Error(
+        'Toggled V' + x.track + ' but its enable state never changed' +
+        (enabledMap[x.id] === false ? ' (Avid reports the command is disabled right now — the timeline window probably needs focus)' : '') +
+        (moved.length ? ' — but ' + moved.join(', ') + ' DID change, so the command moves a different flag than export reads' : '') +
+        '. Set the tracks by hand and grab again; the log has the before/after.'
+      )
+    }
+    before0 = null // only the first iteration can reuse the pre-read state
+  }
+
+  const after = await getMobTrackInfo(sequenceMobId)
+  const on = enabledVideoTracks(after).filter((t) => scope.includes(t.number)).map((t) => t.number)
+  const ok = on.length === 1 && on[0] === trackNumber
+  logMcapiVerbose('solo V' + trackNumber + ' verify', { enabledInStack: on, ok })
+  if (!ok) {
+    throw new Error(
+      'Could not solo V' + trackNumber + ' — after toggling, enabled: ' +
+      (on.map((n) => 'V' + n).join(', ') || 'none') + '. Set the tracks by hand and grab again.'
+    )
+  }
+  return after
+}
+
+// Put the enable state back the way we found it, so automating the grab does
+// not quietly leave the editor's timeline rearranged.
+export async function restoreTrackEnableState({ sequenceMobId, desired }) {
+  const map = await getTrackCommandMap()
+  const now = await getMobTrackInfo(sequenceMobId)
+  const toggles = []
+  for (const t of now) {
+    if (t.type !== TRACKTYPE_PICTURE) continue
+    if (!(t.number in desired)) continue
+    if (!!t.enabled === !!desired[t.number]) continue
+    const id = map['V' + t.number]
+    if (id != null) toggles.push({ track: t.number, id })
+  }
+  logMcapiVerbose('restore track enable', { toggling: toggles.map((x) => 'V' + x.track) })
+  for (const x of toggles) {
+    await doCommand(x.id)
+    await waitForTrackEnabled(sequenceMobId, x.track, !!desired[x.track])
+  }
 }
 
 // Export the grabbed shot to `exportDir`, named after the shot. Returns the path.

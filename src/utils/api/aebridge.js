@@ -21,6 +21,16 @@ export const newProject = (path) =>
 
 export const clearJobs = (all = false) =>
   postJSON('/v1/aebridge/jobs/clear' + (all ? '?all=true' : ''))
+// Move a job to `error` so "Clear finished" will sweep it up.
+export const cancelJob = (jobId) => postJSON(`/v1/aebridge/jobs/${jobId}/cancel`)
+// Hard reset: drop every job whatever its state, and forget which renders were
+// imported. Files on disk are untouched.
+export const hardReset = () => postJSON('/v1/aebridge/reset')
+// Everything in the shared render folder — including extra versions AE emitted
+// from one comp, which the per-job watcher never sees.
+export const listRenders = () => getJSON('/v1/aebridge/renders')
+export const markRenderImported = (path) =>
+  postJSON('/v1/aebridge/renders/imported', { path })
 
 // Parse an EDL the panel exported (helper reads the file, returns clip events).
 export const parseEdl = (edlPath, recIn, recOut, fps) =>

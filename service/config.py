@@ -14,8 +14,15 @@ from pathlib import Path
 HELPER_HOST = os.environ.get("AEBRIDGE_HOST", "127.0.0.1")
 HELPER_PORT = int(os.environ.get("AEBRIDGE_PORT", "8010"))
 
-HELPER_VERSION = "0.0.1"
-FEATURE_IDS = ["aebridge"]
+HELPER_VERSION = "0.0.2"
+# Feature ids the panel checks before using a route, so a stale helper produces
+# "restart the helper" instead of a raw 404. Add one whenever a route lands that
+# the panel would otherwise call blindly — the helper does NOT hot-reload, so a
+# running instance is routinely older than the panel.
+FEATURE_IDS = [
+    "aebridge",
+    "aebridge.renders",  # GET /renders, POST /renders/imported, POST /reset
+]
 MIN_PANEL_VERSION = "0.0.1"
 
 # Nuxt dev server origins allowed to call the helper cross-origin (dev only).

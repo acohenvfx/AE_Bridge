@@ -7,14 +7,31 @@ import tempfile
 from pathlib import Path
 
 # Point the helper at a throwaway home BEFORE importing the app.
+#
+# AEBRIDGE_HOME alone is NOT enough: export_root and watch_root default to
+# ~/Desktop/AEBridge/{plates,render}, which is the user's REAL working folder,
+# not something under base. Every root must be overridden or the tests write
+# junk plates and renders into live editorial folders (they did — 2026-07-29).
 _TMP = tempfile.mkdtemp(prefix="aebridge_test_")
 os.environ["AEBRIDGE_HOME"] = _TMP
+os.environ["AEBRIDGE_EXPORT_ROOT"] = str(Path(_TMP) / "plates")
+os.environ["AEBRIDGE_WATCH_ROOT"] = str(Path(_TMP) / "render")
+os.environ["AEBRIDGE_TEMPLATE_ROOT"] = str(Path(_TMP) / "templates")
+os.environ["AEBRIDGE_AEP_WORK_ROOT"] = str(Path(_TMP) / "aep_work")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 from service.app import app  # noqa: E402
 from service.config import settings  # noqa: E402
 import service.integrations.ae as _ae  # noqa: E402
+
+# Fail loudly rather than touch anything real. This runs at import time, before
+# any test can write a file.
+for _r in settings.roots.all_roots():
+    assert str(_r).startswith(_TMP), (
+        f"REFUSING TO RUN: root {_r} is outside the test sandbox {_TMP}. "
+        "A test would write into the user's real plates/render folders."
+    )
 
 # No After Effects / ffmpeg in CI: stub the OS-facing calls so the route
 # contract is exercisable. (These are proven separately on macOS.)
@@ -162,6 +179,98 @@ def _get_job(job_id):
     return _store.get(job_id)
 
 
+def test_renders_feature_is_advertised():
+    """Every route the panel calls blindly must be behind a feature id, or a
+    stale helper (it never hot-reloads) gives the panel a raw 404 to swallow."""
+    with TestClient(app) as c:
+        ids = c.get("/v1/version").json()["feature_ids"]
+        assert "aebridge.renders" in ids, ids
+
+
+def test_missing_plate_reported():
+    """Deleting a plate off disk must surface on the job, so the panel can
+    offer to drop a job that can never be re-rendered."""
+    _seed_template()
+    with TestClient(app) as c:
+        settings.roots.export_root.mkdir(parents=True, exist_ok=True)
+        plate = settings.roots.export_root / "GONE_010.mov"
+        plate.write_bytes(b"PLATE")
+        r = c.post(
+            "/v1/aebridge/send",
+            json={
+                "template_id": "__blank__",
+                "shot": {"shot_name": "GONE_010"},
+                "reference_path": str(plate),
+            },
+        )
+        assert r.status_code == 200, r.text
+        job_id = r.json()["job_id"]
+        assert r.json()["plates_missing"] == []
+
+        plate.unlink()  # editor cleaned out the plates folder
+        jobs = c.get("/v1/aebridge/jobs").json()
+        me = next(j for j in jobs if j["job_id"] == job_id)
+        assert me["plates_missing"] == ["GONE_010.mov"], me
+
+
+def test_renders_listing_and_reset():
+    """Every file in the render folder is listed - including extra versions AE
+    emitted from one comp - with an imported flag, and hard reset clears the
+    queue without touching files on disk."""
+    _seed_template()
+    with TestClient(app) as c:
+        settings.roots.watch_root.mkdir(parents=True, exist_ok=True)
+        v1 = settings.roots.watch_root / "SHOT_V.mov"
+        v2 = settings.roots.watch_root / "SHOT_V_v2.mov"
+        v1.write_bytes(b"RENDER1")
+        v2.write_bytes(b"RENDER2")
+
+        listed = c.get("/v1/aebridge/renders").json()
+        names = {r["name"] for r in listed}
+        assert {"SHOT_V.mov", "SHOT_V_v2.mov"} <= names, names
+        assert all(r["imported"] is False for r in listed if r["name"] in names)
+
+        # Marking one imported must stick, and only for that file.
+        assert c.post("/v1/aebridge/renders/imported", json={"path": str(v2)}).status_code == 200
+        by_name = {r["name"]: r for r in c.get("/v1/aebridge/renders").json()}
+        assert by_name["SHOT_V_v2.mov"]["imported"] is True
+        assert by_name["SHOT_V.mov"]["imported"] is False
+
+        # A render outside watch_root must be refused.
+        assert c.post("/v1/aebridge/renders/imported", json={"path": "/etc/passwd"}).status_code == 400
+
+        # Hard reset drops jobs but leaves the media alone.
+        c.post("/v1/aebridge/send", json={
+            "template_id": "__blank__", "shot": {"shot_name": "STUCK_001"},
+        })
+        assert len(c.get("/v1/aebridge/jobs").json()) > 0
+        c.post("/v1/aebridge/reset")
+        assert c.get("/v1/aebridge/jobs").json() == []
+        assert v1.exists() and v2.exists()
+
+        # ...and imported renders STAY imported. They are in Avid whatever the
+        # job queue says, and the editor may have moved the clip to another bin;
+        # re-offering them would invite a duplicate import.
+        by_name = {r["name"]: r for r in c.get("/v1/aebridge/renders").json()}
+        assert by_name["SHOT_V_v2.mov"]["imported"] is True
+        assert by_name["SHOT_V.mov"]["imported"] is False
+
+
+def test_imported_renders_survive_helper_restart():
+    """Import history is persisted: a fresh Store (i.e. a helper restart) must
+    still know what has already been pulled into Avid."""
+    from service.jobs import Store
+
+    with TestClient(app) as c:
+        settings.roots.watch_root.mkdir(parents=True, exist_ok=True)
+        f = settings.roots.watch_root / "PERSIST_ME.mov"
+        f.write_bytes(b"RENDER")
+        assert c.post("/v1/aebridge/renders/imported", json={"path": str(f)}).status_code == 200
+
+    fresh = Store()  # stands in for a restarted helper
+    assert fresh.is_render_imported(f), "import history did not persist"
+
+
 if __name__ == "__main__":
     test_version_and_templates()
     test_new_per_shot_roundtrip()
@@ -169,4 +278,8 @@ if __name__ == "__main__":
     test_existing_project_via_picked_token()
     test_multi_plate_send()
     test_path_escape_rejected()
+    test_renders_feature_is_advertised()
+    test_missing_plate_reported()
+    test_renders_listing_and_reset()
+    test_imported_renders_survive_helper_restart()
     print("ALL SMOKE TESTS PASSED")

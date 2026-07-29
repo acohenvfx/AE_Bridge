@@ -111,6 +111,12 @@ class ImportRequest(BaseModel):
     target_bin: Optional[str] = None
 
 
+class RenderImportedRequest(BaseModel):
+    """Panel reporting that it imported a loose render file into Avid."""
+
+    path: str
+
+
 class TemplateInfo(BaseModel):
     id: str
     label: str
@@ -166,6 +172,29 @@ class JobView(BaseModel):
     return_bin: Optional[str] = None
     validation: Optional[ValidationReport] = None
     error: Optional[str] = None
+    # Plate files that are no longer on disk (the editor cleaned the plates
+    # folder). Such a job can no longer be re-rendered, so the panel offers to
+    # drop it from the list.
+    plates_missing: list[str] = Field(default_factory=list)
+
+
+class RenderFile(BaseModel):
+    """A media file sitting in the shared render folder.
+
+    AE can render several versions out of one comp, and only the first gets
+    matched to its job — so the folder is listed in full and anything not yet
+    imported is offered to the user.
+    """
+
+    name: str
+    path: str
+    size: int = 0
+    modified: float = 0.0
+    job_id: Optional[str] = None  # job whose render_stem this matches, if any
+    imported: bool = False
+    # Written to very recently — AE is probably still rendering it. Importing a
+    # half-written movie gives Avid a truncated clip, so the panel refuses.
+    writing: bool = False
 
 
 class VersionResponse(BaseModel):

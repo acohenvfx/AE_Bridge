@@ -27,8 +27,10 @@ into the export bin. Confirmed working by the user on real MXF media.
 ## The grab pipeline (as-built) — `src/utils/api/timeline.js`
 
 `grabShot({ trackNumber })` → `grabSourceHandledMob` → `chooseTrackAndTarget`.
-**One call grabs ONE plate** (one track). A stacked shot is grabbed in several
-passes — see the isolation facts below for why there is no other way.
+**One call grabs ONE plate** (one track) — export isolation is per-track and
+there is no way around that. A stacked shot therefore takes N passes, and the
+editor solos each track by hand (the panel cannot set track enable). **Auto-grab**
+watches for each solo and grabs it, so they never leave the timeline.
 
 1. **The chosen track** (`trackNumber`, default 1 = V1) must have content and be
    **enabled**, else it throws. Then the flatten guard: any *other* enabled
@@ -69,7 +71,9 @@ what is under the playhead, without grabbing anything.
   export is **`enabled_tracks_only: true`** — which respects the timeline's
   enabled-track state. This is confirmed in EB's own SubclipIt code/comments.
   Consequence: to export only V1, **V1 must be enabled and higher video tracks
-  disabled** (there is no MCAPI to toggle track enable).
+  disabled** — and **the panel cannot set that state**; the editor does it by
+  hand. (Driving the `Tracks` commands via `DoCommand` was tried and does not
+  move it — see below.)
 - **`CreateSubClip` does NOT fan one subclip per enabled track, and the `Tracks`
   column LIES.** (Verified in Avid 2026-07-28 — an earlier version of this doc
   claimed the opposite; that claim was wrong and cost a build.) With V1+V2 both
@@ -83,16 +87,46 @@ what is under the playhead, without grabbing anything.
   for every other enabled video track it runs that track's own EDL
   (`ExportEDL` *does* honor `track_list`) and, if a clip sits under the
   playhead, refuses the grab rather than exporting a flatten.
-- **`DoCommand` / `GetListOfCommands` returned `code=7` (access denied)** — but
-  an earlier session recorded that as a hard platform rule, which was never
-  established. Those RPCs carry their **own API scope**,
-  `avid.mediacomposer.command`, and the manifest only declared `general` +
-  `timelineEditing`. **The scope is now declared** in `build/manifest.mjs`;
-  the panel's **Probe commands** button (Log section → `probeCommands()`)
-  calls `GetListOfCommands` to settle it. If it returns a list, the panel may
-  be able to drive track enable and automate the stack grab; if it is still
-  `code=7`, the denial is real. Requires an `.avpi` rebuild + MC restart, and
-  eventually re-signing (`usesApi` is part of the signed manifest).
+- **`DoCommand` / `GetListOfCommands` WORK. They were never denied to panels.**
+  An earlier session hit `code=7` and recorded "access denied for panels" as a
+  platform rule. It was a **missing manifest scope**: these RPCs carry their own
+  `avid.mediacomposer.command` scope and `usesApi` only listed `general` +
+  `timelineEditing`. With the scope declared (`build/manifest.mjs`),
+  `GetListOfCommands` returns **730 commands** (CONFIRMED in Avid 2026-07-28).
+  - There is a **`Tracks` category** with one command per track — `V1`…`V24`,
+    `A1`…`A24`, i.e. the timeline track-selector buttons.
+  - **BUT driving them does NOT change the export enable state.** Tried and
+    PARKED 2026-07-29: Avid accepts the command (no error once paced) and
+    `GetMobTrackInfo.enabled` never moves. So **track soloing remains manual** —
+    `GetMobTrackInfo` is read-only and no write path has been found.
+    Unresolved, and worth finishing if it ever matters: does
+    `IsCommandsEnabled` report the command as disabled (⇒ Avid wants the
+    timeline window focused, not the panel), or does a *different* field
+    (`selected` / `monitored`) move instead (⇒ we were waiting on the wrong
+    flag)? UI `.5` logs `toggle V<n>` / `toggle V<n> DID NOT TAKE` with a full
+    before/after and `fieldsThatMoved` to answer exactly that. The experiment
+    lives behind **Try auto-solo** in the Log section, out of the grab flow.
+  - **Command ids are NOT sequential** (V1=6231, V2=6230, V3=6176, V10=6475).
+    Never hardcode them — `getTrackCommandMap()` looks them up by name and
+    caches per session.
+  - They are **toggles, not setters**: read `GetMobTrackInfo`, flip only what
+    differs, then **re-read to verify** (a wrong enable state silently yields a
+    flattened plate).
+  - **Avid runs ONE command at a time, and `DoCommand` returns BEFORE the
+    command finishes.** Firing two back to back gives
+    `code=2 {"ErrorMessage":"Can't start more than one command on time.","ErrorType":73}`.
+    That is a **busy signal, not a refusal** — same "RPC returns early" trap as
+    `ExportFile`. `doCommand()` retries on it with linear backoff (`isCommandBusy`),
+    and `soloVideoTrack` waits for each track's enable state to actually flip
+    (`waitForTrackEnabled`) before issuing the next — which both paces the
+    commands and verifies each step. The panel also suspends its shot poll
+    (`grabbingAll`) for the duration.
+  - Changing `usesApi` means the `.avpi` must be rebuilt + MC restarted, and
+    re-signed by Avid for distribution.
+  - **Lesson:** "can't be done" entries deserve suspicion — the per-track fan
+    and the DoCommand denial both fell. But the reverse also applies: reaching
+    the API is not the same as it doing what you want. `DoCommand` became
+    available and *still* couldn't set track enable.
 - **ExportFile composites.** Exporting a sequence-derived subclip that spans
   multiple tracks renders the FLATTENED composite (V2 over V1), even though its
   `Source File` column shows one clip. Only an exactly-single-track subclip
@@ -149,7 +183,7 @@ what is under the playhead, without grabbing anything.
 - **UI build stamp:** `UI_BUILD` const in `AEBridgePanel.vue` renders as a header
   pill and logs on load. **Bump it on every UI change** so the user can tell
   which build the Avid WebView has cached (the WebView caches aggressively;
-  reopen the panel to force a fresh bundle). Current: `2026-07-28.12`.
+  reopen the panel to force a fresh bundle). Current: `2026-07-29.6`.
 - Project persistence (remembers last `.aep` across panel reloads AND helper
   restarts, re-registering the path for a fresh token).
 
@@ -159,6 +193,24 @@ what is under the playhead, without grabbing anything.
   helper serves the generated Nuxt build at `8010/app`.
 - **Helper does NOT hot-reload** — restart `PYTHONPATH=. python -m service.app`
   after any `service/**` change. Panel (`yarn dev`) hot-reloads.
+- **Therefore: feature-gate every new route.** A running helper is routinely
+  older than the panel, so a panel calling a route it lacks gets a raw 404. Add
+  an id to `FEATURE_IDS` (`service/config.py`), check `/v1/version`
+  `feature_ids` in the panel before calling, and show "restart the helper"
+  instead. This bit the Renders section (`aebridge.renders`, helper `0.0.2`):
+  Rescan silently did nothing because the panel swallowed the 404. Regression
+  test: `test_renders_feature_is_advertised`.
+  **And never swallow a failed fetch in a refresh method** — a control that
+  does nothing with no explanation is worse than an error.
+
+**Tests must sandbox EVERY root.** `AEBRIDGE_HOME` only moves `base` —
+`export_root` and `watch_root` default to `~/Desktop/AEBridge/{plates,render}`,
+the user's REAL editorial folders, independent of base. `tests/test_smoke.py`
+sets all four env vars and then **asserts at import time** that every
+`settings.roots.all_roots()` entry is inside the temp dir, aborting before any
+test can write. This is not hypothetical: on 2026-07-29 the smoke tests wrote
+stub plates and renders into the live Desktop folders, where they showed up in
+the panel's Renders list.
 
 ```bash
 nvm use && yarn install && yarn dev        # 127.0.0.1:3010/app
@@ -215,30 +267,92 @@ The vertical multi-plate stack, via a **guided multi-pass grab** (UI
   playhead; UI build stamp pill. Rejected: Match Frame (DoCommand
   access-denied), master-subclip-by-source-TC (Format Descriptor errors).
 
-## Auto-grab (UI `.11`)
+## Grabbing a stack — soloing is MANUAL (UI `2026-07-29.6`)
 
-Avid exposes **no setter** for track enable (`GetMobTrackInfo` is get-only; no
-`SetMobTrackInfo` anywhere in the proto), so the per-track toggling is manual.
-**Auto-grab** removes the app-switching instead: with the toggle on, the shot
-poll (`readShot`, 1.5s) calls `maybeAutoGrab()`, which reads the enable state
-and grabs a plate the moment exactly one *stack* track is soloed. The user
-stays in the Avid timeline and just works down the tracks.
+The panel cannot set track enable (see the `DoCommand` note above), so the
+editor solos each track by hand. Two modes:
 
-Rules: exactly one stack track enabled; that track ungrabbed; **V1 first**
-(it names the stack); never while a grab/send/analyze is in flight. Tracks
-outside the stack are ignored — they carry no picture over this shot, so they
-cannot flatten it. Status text surfaces why it is waiting.
+1. **Auto-grab — ON by default.** The shot poll watches the enable state and
+   grabs a plate the moment exactly one stack track is soloed. The editor stays
+   in the timeline and works down the stack; they never return to the panel.
+   Rules: exactly one stack track enabled; that track ungrabbed; **V1 first**
+   (it names the stack); never while another operation is in flight. Tracks
+   outside the stack are ignored — no picture over this shot, so no flatten
+   risk. `autoGrabStatus` says why it is waiting.
+2. **Per-track buttons.** Fully manual, for when auto-grab is off.
 
-If the command probe succeeds, this can be replaced by the panel driving the
-toggles itself.
+`doGrabAll()` / `soloVideoTrack()` (the auto-solo attempt) are **retained but
+out of the flow**, behind **Try auto-solo** in the Log section. They are
+correct apart from the unresolved question of why the enable state won't move,
+and are the starting point if that is ever picked up again.
+
+## Polling cost (UI `.13`)
+
+MCAPI has **no push events**, so the shot readout must poll — and each tick is
+**3 RPCs** into Media Composer (`GetViewerMobs`, `GetOpenProjectInfo`,
+`GetMobInfo`). `shotPollTick()` keeps that honest:
+
+- **Hidden panel → no polling at all** (`visibilitychange`).
+- **Idle backoff:** unchanged playhead for ~12s (`IDLE_TICKS_BEFORE_SLOW`) drops
+  the effective rate from 1.5s to 6s; any change, refocus, or `wakePolling()`
+  restores it.
+- **Never backs off** while auto-grab is on or a grab/send is in flight.
+- **Pause updates** chip stops it outright (remembered); Refresh still works.
+
+## Renders list, orphaned jobs, hard reset (UI `2026-07-29.1`)
+
+- **`GET /renders`** lists **every** media file in `watch_root` with an
+  `imported` flag, matched to a job by `render_stem` where possible. The
+  per-job watcher only ever claims ONE render, so a v2/v3 out of the same comp
+  was previously invisible — this is how those get imported. `POST
+  /renders/imported` records the import (tracked **per file**, not per job).
+- **Orphaned jobs:** `JobView.plates_missing` lists plate files no longer on
+  disk (`Job.plate_paths` is populated at send). A job whose plate was deleted
+  can never be re-rendered, so the panel flags it and offers **Remove**
+  (cancel → error → clear finished).
+- **`POST /reset`** drops every job whatever its state. Files on disk are
+  untouched. Panel: **Hard reset** (confirms first).
+- **Import history is PERSISTED and survives both hard reset and a helper
+  restart** (`<base>/imported_renders.json`, `Store._load/_save_imported`).
+  Once a render is in Avid it is in Avid — the editor may have moved the clip
+  to another bin, and re-offering it would invite a duplicate import. Use
+  `store.forget_imported_renders()` if that ever needs clearing deliberately;
+  `reset()` must not. Tests: `test_renders_listing_and_reset`,
+  `test_imported_renders_survive_helper_restart`.
+- **Polled lists must not thrash the DOM.** `refreshJobs`/`refreshRenders`
+  compare a `sig()` (JSON) of the new list and only reassign on a real change,
+  and background polls pass `quiet` so the button never flips to "Reading…".
+  Reassigning a fresh array every 4s makes Vue rebuild every row — the user
+  saw it as a glitch.
+- **A render still being written** (mtime within `_RENDER_SETTLE_SECS`) is
+  flagged `writing`, shown as "rendering…" with no size, and cannot be
+  imported — both to stop the size text jittering each poll and to prevent
+  importing a truncated movie.
+- **Re-grab:** each grabbed plate has a **Re-grab** button, and **Reset stack**
+  clears the whole plan. Dropping V1 resets the entire stack, since V1's marker
+  names every other plate. Neither deletes the Avid subclip (no delete API) —
+  they only forget it here, which is what you want after deleting it by hand.
+- **Template picker is hidden** while `__blank__` is the only template;
+  `s.templateId` still flows to `/send`. It reappears if `template_root` ever
+  gains real templates.
+- **No Refresh button** on Current shot (it self-refreshes) — except while
+  **Pause updates** is on, when it is the only way to update.
 
 ## Next steps / open items
 
-- **Run "Probe commands"** (needs `yarn build:panel && yarn build:copy` + an MC
-  restart, since the manifest changed). This is the highest-value open
-  question: a command list likely means the whole multi-pass dance can be
-  automated. Look for track-selector entries in the `commands: track-related`
-  log line.
+- **Auto-solo is PARKED, not abandoned.** One run of **Try auto-solo** (Log
+  section) with UI `.5`+ answers why: `commandEnabled` false ⇒ focus; a moved
+  `selected`/`monitored` ⇒ wrong flag. Worth doing before anyone re-attempts it.
+- **730 commands are now reachable** — worth a read-through of the list for
+  other things AEBridge does by hand today. `Timeline/Mixdown → Video…` (1937)
+  in particular might offer a different route to a flattened plate.
+- **Consumer-simplification pass (agreed, not built):** one Send button doing
+  analyze → grab → export → launch; Jobs + Renders merged into one **Shots**
+  list with versions nested; set-once settings behind a disclosure; build pill,
+  log, probe, pause, hard reset behind **Diagnostics**. Prefix/suffix **stay**,
+  moved onto the shot card beside the resulting plate name (per-shot naming is
+  a real editorial need, not just collision avoidance). NOTE: one-button Send
+  can only fold in the *grab*, not the soloing, while auto-solo is parked.
 - **Verify the guided stack grab in Avid.** Test sequence `DE_DEMO_NEW`, playhead
   `01:03:03:01`: V1+V2+V3 all carry a clip over `01:03:03:01 → 01:03:20:04`
   (identical spans, so all offsets should compute to **0**). Sequence: Analyze →

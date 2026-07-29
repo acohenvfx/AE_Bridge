@@ -33,7 +33,16 @@
       <div class="eb-section">
         <div class="eb-section-head">
           <h3 class="eb-section-title">Current shot</h3>
-          <button class="eb-btn eb-btn--ghost eb-btn--mini" :disabled="reading" @click="readShot">
+          <label
+            class="eb-chip"
+            :class="{ 'is-on': s.pollPaused }"
+            title="Stop the panel polling Media Composer for the playhead position. Refresh still works."
+          >
+            <input v-model="s.pollPaused" type="checkbox" style="margin-right:6px"> Pause updates
+          </label>
+          <!-- The readout refreshes itself, so no Refresh button — except while
+               paused, when it is the only way to update. -->
+          <button v-if="s.pollPaused" class="eb-btn eb-btn--ghost eb-btn--mini" :disabled="reading" @click="readShot">
             {{ reading ? 'Reading…' : 'Refresh' }}
           </button>
         </div>
@@ -62,7 +71,12 @@
             <label v-if="s.stack.length" class="eb-chip" :class="{ 'is-on': s.autoGrab }" :title="'Grab each plate automatically as you solo its track in the Avid timeline'">
               <input v-model="s.autoGrab" type="checkbox" style="margin-right:6px"> Auto-grab
             </label>
-            <button v-if="s.stack.length" class="eb-btn eb-btn--ghost eb-btn--mini" @click="resetStack">Reset</button>
+            <button
+              v-if="s.stack.length || s.grabbed.length"
+              class="eb-btn eb-btn--ghost eb-btn--mini"
+              title="Forget the plan and every grabbed plate, so you can re-grab from scratch (e.g. after deleting the subclips in Avid)"
+              @click="resetStack"
+            >Reset stack</button>
           </div>
         </div>
 
@@ -88,7 +102,14 @@
                   </div>
                 </div>
               </div>
-              <span v-if="isGrabbed(p.track)" class="eb-stat"><b>grabbed ✓</b></span>
+              <span v-if="isGrabbed(p.track)" class="plate-done">
+                <span class="eb-stat"><b>grabbed ✓</b></span>
+                <button
+                  class="eb-btn eb-btn--ghost eb-btn--mini"
+                  title="Drop this plate so it can be grabbed again — use it if you deleted the subclip in Avid"
+                  @click="ungrab(p.track)"
+                >Re-grab</button>
+              </span>
               <button
                 v-else-if="nextTrack === p.track"
                 class="eb-btn eb-btn--primary eb-btn--mini"
@@ -100,16 +121,16 @@
           </div>
           <div v-if="nextTrack !== null" class="eb-callout" style="margin-top:10px">
             <template v-if="s.autoGrab">
-              Solo <b>V{{ nextTrack }}</b> in the Avid timeline
-              <span v-if="otherTracks.length">(only V{{ nextTrack }} enabled)</span> —
-              the panel grabs it as soon as it sees it, so you can stay in Avid and just
-              work down the tracks. {{ autoGrabStatus }}
+              In the timeline, enable <b>only V{{ nextTrack }}</b><span v-if="otherTracks.length">
+              (turn off {{ otherTracks.map(t => 'V' + t).join(', ') }})</span> — the panel grabs it
+              the moment it sees it, so you can stay in Avid and work down the stack.
+              {{ autoGrabStatus }}
             </template>
             <template v-else>
-              In the Avid timeline, enable <b>only V{{ nextTrack }}</b>
-              <span v-if="otherTracks.length"> (turn off {{ otherTracks.map(t => 'V' + t).join(', ') }})</span>,
-              then click Grab V{{ nextTrack }}. The panel checks the enable state and refuses if another
-              track would flatten into the plate.
+              Enable <b>only V{{ nextTrack }}</b><span v-if="otherTracks.length">
+              (turn off {{ otherTracks.map(t => 'V' + t).join(', ') }})</span>, then click
+              Grab V{{ nextTrack }}. Turn on Auto-grab to skip coming back to the panel each time.
+              Either way, a grab that would flatten is refused.
             </template>
           </div>
           <div v-else class="eb-callout" style="margin-top:10px">
@@ -120,7 +141,10 @@
 
       <div class="eb-section">
         <div class="eb-grid cols-2">
-          <div class="eb-field">
+          <!-- Template picker is hidden while __blank__ is the only option;
+               s.templateId still flows to /send. It reappears if real
+               templates ever land in template_root. -->
+          <div v-if="s.templates.length > 1" class="eb-field">
             <label class="eb-label">Template</label>
             <select v-model="s.templateId" class="eb-select">
               <option v-for="t in s.templates" :key="t.id" :value="t.id">{{ t.label }}</option>
@@ -194,16 +218,30 @@
             class="eb-btn eb-btn--ghost eb-btn--mini"
             @click="doClearJobs"
           >Clear finished</button>
+          <button
+            class="eb-btn eb-btn--ghost eb-btn--mini"
+            title="Drop every job whatever its state and forget which renders were imported. Files on disk are untouched."
+            @click="doHardReset"
+          >Hard reset</button>
         </div>
         <div v-if="!s.jobs.length" class="eb-muted">No jobs yet.</div>
         <div v-else class="jobs">
-          <div v-for="j in s.jobs" :key="j.job_id" class="job">
+          <div v-for="j in s.jobs" :key="j.job_id" class="job" :class="{ 'is-orphan': j.plates_missing && j.plates_missing.length }">
             <div>
               <div class="eb-mono job-name">{{ j.job_id }}</div>
               <div class="job-state">{{ stateLabel(j.state) }}</div>
+              <div v-if="j.plates_missing && j.plates_missing.length" class="c-bad" style="font-size:11px">
+                plate deleted: {{ j.plates_missing.join(', ') }}
+              </div>
             </div>
             <button
-              v-if="j.state === 'returned'"
+              v-if="j.plates_missing && j.plates_missing.length"
+              class="eb-btn eb-btn--ghost eb-btn--mini"
+              title="This job's plate is gone from the plates folder, so it can never be re-rendered"
+              @click="doRemoveJob(j)"
+            >Remove</button>
+            <button
+              v-else-if="j.state === 'returned'"
               class="eb-btn eb-btn--primary eb-btn--mini"
               :disabled="importingId === j.job_id"
               @click="doImport(j)"
@@ -213,6 +251,45 @@
             <span v-else class="eb-stat">
               <b>{{ j.project_mode === 'existing_project' ? 'shared' : 'per-shot' }}</b>
             </span>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="s.inAvid" class="eb-section">
+        <div class="eb-section-head">
+          <h3 class="eb-section-title">Renders</h3>
+          <span v-if="pendingRenders.length" class="eb-chip is-on">{{ pendingRenders.length }} new</span>
+          <button class="eb-btn eb-btn--ghost eb-btn--mini" :disabled="loadingRenders" @click="refreshRenders(false)">
+            {{ loadingRenders ? 'Reading…' : 'Rescan' }}
+          </button>
+        </div>
+        <div v-if="rendersError" class="eb-callout c-bad" style="font-size:11.5px">
+          {{ rendersError }}
+          <div v-if="!helperHasRenders" class="eb-mono" style="margin-top:6px">
+            PYTHONPATH=. python -m service.app
+          </div>
+        </div>
+        <div v-else-if="!s.renders.length" class="eb-muted" style="font-size:11.5px">
+          Nothing in the render folder yet. Every file AE writes there shows up here —
+          including extra versions of the same comp, which the per-job watcher never sees.
+        </div>
+        <div v-else class="jobs">
+          <div v-for="r in s.renders" :key="r.path" class="job">
+            <div>
+              <div class="eb-mono job-name">{{ r.name }}</div>
+              <div class="job-state">
+                {{ r.job_id ? r.job_id : 'no matching job' }}
+                <span v-if="!r.writing"> · {{ formatSize(r.size) }}</span>
+              </div>
+            </div>
+            <span v-if="r.imported" class="eb-stat"><b>imported</b></span>
+            <span v-else-if="r.writing" class="eb-stat"><b>rendering…</b></span>
+            <button
+              v-else
+              class="eb-btn eb-btn--primary eb-btn--mini"
+              :disabled="importingRender === r.path"
+              @click="doImportRender(r)"
+            >{{ importingRender === r.path ? 'Importing…' : 'Import to Avid' }}</button>
           </div>
         </div>
       </div>
@@ -233,6 +310,16 @@
               title="Test whether this panel may drive Avid commands (needs the avid.mediacomposer.command scope)"
               @click="doProbeCommands"
             >{{ probing ? 'Probing…' : 'Probe commands' }}</button>
+            <!-- Parked experiment: driving the track selectors via DoCommand.
+                 Avid accepts the command but the enable state never moves. Kept
+                 here (not in the grab flow) so it can be retested cheaply. -->
+            <button
+              v-if="s.inAvid && s.stack.length && nextTrack !== null"
+              class="eb-btn eb-btn--ghost eb-btn--mini"
+              :disabled="grabbingAll || s.grabbingTrack !== null"
+              title="Experimental: have Avid solo each track itself. Known not to work — logs a full before/after diagnosis."
+              @click="doGrabAll"
+            >{{ grabbingAll ? 'Trying…' : 'Try auto-solo' }}</button>
             <button class="eb-btn eb-btn--ghost eb-btn--mini" @click="copyLog">{{ copied ? 'Copied ✓' : 'Copy' }}</button>
             <button class="eb-btn eb-btn--ghost eb-btn--mini" @click="clearLog">Clear</button>
           </div>
@@ -262,12 +349,29 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-07-28.12 · collapsible log'
+const UI_BUILD = '2026-07-29.6 · manual solo + auto-grab'
+
+// Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
+// fast only while something is actually happening.
+const POLL_FAST_MS = 1500
+const POLL_SLOW_MS = 6000
+const IDLE_TICKS_BEFORE_SLOW = 8 // ~12s unchanged -> back off
+
+// Cheap change-detector for polled lists. Polling every few seconds and
+// assigning a brand-new array each time makes Vue tear down and rebuild every
+// row — visible as a flicker. Compare first, assign only on a real change.
+function sig(list) {
+  try {
+    return JSON.stringify(list)
+  } catch (e) {
+    return String(Math.random()) // unserializable: treat as changed
+  }
+}
 
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', probing: false, _timer: null, _shotTimer: null, _logTimer: null }
+    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', probing: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0 }
   },
   computed: {
     logText() {
@@ -277,6 +381,14 @@ export default {
     // having to open the log.
     logErrorCount() {
       return this.logEntries.filter((e) => e.kind === 'error').length
+    },
+    pendingRenders() {
+      return (this.s.renders || []).filter((r) => !r.imported)
+    },
+    // Renders/reset routes landed in helper 0.0.2. The helper does not
+    // hot-reload, so this is routinely false until the user restarts it.
+    helperHasRenders() {
+      return (this.s.helperFeatures || []).includes('aebridge.renders')
     },
     // Lowest track not yet grabbed — grabbed bottom-up so V1's marker names the stack.
     nextTrack() {
@@ -307,23 +419,45 @@ export default {
     if (this.s.inAvid) {
       this.loadExportSettings()
       this.readShot()
-      // Auto-refresh the current shot readout (MCAPI has no push events).
-      this._shotTimer = setInterval(() => this.readShot(true), 1500)
+      // Auto-refresh the current shot readout (MCAPI has no push events, so
+      // polling is the only option). Every tick costs Media Composer 3 RPCs,
+      // so it backs off when idle and stops entirely when the panel is hidden
+      // — see shotPollTick.
+      this._shotTimer = setInterval(this.shotPollTick, POLL_FAST_MS)
     }
-    this._timer = setInterval(this.refreshJobs, 4000)
+    if (this.s.inAvid) this.refreshRenders()
+    this._timer = setInterval(() => {
+      this.refreshJobs()
+      // Renders are files, not MCAPI — polling them costs Avid nothing, and
+      // it's how a second version of a comp gets noticed.
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        this.refreshRenders(true) // quiet: don't stomp on s.message from a poll
+      }
+    }, 4000)
     this._logTimer = setInterval(() => { this.logEntries = getMcapiLog() }, 1000)
+    // Avid's WebView keeps running when the panel is behind other windows;
+    // there is no reason to keep interrogating MC then.
+    this._onVis = () => {
+      if (document.visibilityState === 'visible') this.wakePolling()
+    }
+    document.addEventListener('visibilitychange', this._onVis)
   },
   beforeDestroy() {
     if (this._timer) clearInterval(this._timer)
     if (this._shotTimer) clearInterval(this._shotTimer)
     if (this._logTimer) clearInterval(this._logTimer)
+    if (this._onVis) document.removeEventListener('visibilitychange', this._onVis)
   },
   watch: {
     's.exportSetting'(v) { this.savePref('exportSetting', v) },
     's.prefix'(v) { this.savePref('prefix', v) },
     's.suffix'(v) { this.savePref('suffix', v) },
     's.projectMode'(v) { this.savePref('projectMode', v) },
-    's.logOpen'(v) { this.savePref('logOpen', v ? '1' : '0') }
+    's.logOpen'(v) { this.savePref('logOpen', v ? '1' : '0') },
+    's.pollPaused'(v) { this.savePref('pollPaused', v ? '1' : '0'); if (!v) this.wakePolling() },
+    // Turning auto-grab on must restore a responsive poll, or it could sit in
+    // the slow lane and take seconds to notice a soloed track.
+    's.autoGrab'(v) { if (v) this.wakePolling() }
   },
   methods: {
     savePref(k, v) {
@@ -339,6 +473,7 @@ export default {
         if (g('projectPath') != null) this.s.projectPath = g('projectPath')
         if (g('projectLabel') != null) this.s.projectLabel = g('projectLabel')
         if (g('logOpen') != null) this.s.logOpen = g('logOpen') === '1'
+        if (g('pollPaused') != null) this.s.pollPaused = g('pollPaused') === '1'
       } catch (e) {}
     },
     stateLabel(x) {
@@ -349,8 +484,10 @@ export default {
         const v = await api.getVersion()
         this.s.helper = { online: true, version: v.helper_version }
         this.s.ae = { found: !!v.ae_version, version: v.ae_version }
+        this.s.helperFeatures = v.feature_ids || []
       } catch (e) {
         this.s.helper = { online: false, version: null }
+        this.s.helperFeatures = []
       }
     },
     async refreshTemplates() {
@@ -366,7 +503,10 @@ export default {
     async refreshJobs() {
       try {
         const jobs = await api.listJobs()
-        this.s.jobs = jobs.slice().reverse()
+        // Only reassign when something actually changed — a fresh array every
+        // 4s makes Vue re-render every row, which reads as a flicker.
+        const next = jobs.slice().reverse()
+        if (sig(next) !== sig(this.s.jobs)) this.s.jobs = next
       } catch (e) {
         /* leave prior list */
       }
@@ -377,6 +517,31 @@ export default {
       } catch (e) {
         this.s.exportSettings = []
       }
+    },
+    // One poll tick. Skips entirely when the panel is hidden or paused, and
+    // backs off to POLL_SLOW_MS once the shot has been unchanged for a while,
+    // so an idle panel is not hammering Media Composer in the background.
+    async shotPollTick() {
+      if (!this.s.inAvid || this.s.pollPaused) return
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      if (this.grabbingAll) return // don't compete with the track-command sequence
+      // Auto-grab needs a responsive poll; so does an in-flight operation.
+      const busy = this.s.autoGrab || this.s.grabbingTrack !== null || this.s.sending
+      if (!busy && this._idleTicks >= IDLE_TICKS_BEFORE_SLOW) {
+        this._slowSkip = (this._slowSkip || 0) + 1
+        if (this._slowSkip < Math.round(POLL_SLOW_MS / POLL_FAST_MS)) return
+      }
+      this._slowSkip = 0
+      const beforeTC = this.s.shot && this.s.shot.playheadTC
+      await this.readShot(true)
+      const afterTC = this.s.shot && this.s.shot.playheadTC
+      if (afterTC && afterTC === beforeTC) this._idleTicks += 1
+      else this._idleTicks = 0
+    },
+    // Something happened (panel refocused, user acted) — poll at full rate again.
+    wakePolling() {
+      this._idleTicks = 0
+      this._slowSkip = 0
     },
     async readShot(quiet = false) {
       if (!this.s.inAvid) return
@@ -480,6 +645,21 @@ export default {
       this.s.stackTC = ''
       this.s.message = ''
     },
+    // Drop one grabbed plate so it can be grabbed again. The Avid subclip is
+    // NOT deleted (no delete API) — this only forgets it here, which is what
+    // you want after deleting the subclip by hand.
+    ungrab(track) {
+      this.s.grabbed = this.s.grabbed.filter((g) => g.track !== track)
+      // V1 names the stack, so dropping it invalidates the inherited names.
+      if (track === 1) {
+        this.s.baseName = ''
+        this.s.stackShot = null
+        this.s.grabbed = []
+        this.s.message = 'Dropped V1 — the whole stack must be re-grabbed (V1 names it).'
+      } else {
+        this.s.message = 'Dropped V' + track + ' — grab it again.'
+      }
+    },
     async doAnalyze() {
       this.s.analyzing = true
       this.s.message = 'Reading each video track…'
@@ -512,6 +692,48 @@ export default {
         this.s.message = 'Analyze error: ' + e.message
       } finally {
         this.s.analyzing = false
+      }
+    },
+    // Grab every plate in one go: solo each track via Avid commands, grab it,
+    // then put the timeline's enable state back. No manual toggling.
+    async doGrabAll() {
+      if (!this.s.stack.length) return
+      const seq = this.s.shot && this.s.shot.mobId
+      if (!seq) { this.s.message = 'No sequence — refresh the shot first.'; return }
+      const stackTracks = this.s.stack.map((p) => p.track)
+      // Remember the editor's own enable state so we can restore it.
+      const desired = {}
+      try {
+        for (const t of await tl.getMobTrackInfo(seq)) {
+          if (stackTracks.includes(t.number)) desired[t.number] = !!t.enabled
+        }
+      } catch (e) { /* restore is best-effort */ }
+
+      this.s.autoGrab = false // the two would race each other
+      // Avid runs one command at a time; keep the shot poll out of the way
+      // while we drive the track selectors.
+      this.grabbingAll = true
+      try {
+        for (const p of this.s.stack) {
+          if (this.isGrabbed(p.track)) continue
+          this.s.message = 'Soloing V' + p.track + '…'
+          await tl.soloVideoTrack({ sequenceMobId: seq, trackNumber: p.track, stackTracks })
+          await this.doGrab(p.track)
+          // doGrab swallows its error into s.message; stop rather than pile up.
+          if (!this.isGrabbed(p.track)) {
+            this.s.message = 'Stopped at V' + p.track + ' — ' + this.s.message
+            break
+          }
+        }
+      } catch (e) {
+        this.s.message = 'Auto-solo failed: ' + e.message
+      } finally {
+        try {
+          await tl.restoreTrackEnableState({ sequenceMobId: seq, desired })
+        } catch (e) {
+          this.s.message += ' (track enable state left as-is — check the timeline)'
+        }
+        this.grabbingAll = false
       }
     },
     async doGrab(track) {
@@ -595,6 +817,104 @@ export default {
         await this.refreshJobs()
       } catch (e) {
         this.s.message = 'Clear error: ' + e.message
+      }
+    },
+    // Escape hatch for a wedged queue: drop every job whatever its state. Files
+    // on disk survive, so anything still wanted is re-importable from Renders.
+    async doHardReset() {
+      if (!this.helperHasRenders) {
+        this.s.message = 'Restart the AEBridge helper first — the running one predates /reset.'
+        return
+      }
+      const ok = window.confirm(
+        'Hard reset the job queue?\n\n' +
+        'Every job is dropped, whatever its state.\n\n' +
+        'Nothing on disk is deleted, and renders you have already imported stay ' +
+        'marked as imported — so nothing gets pulled into Avid twice.'
+      )
+      if (!ok) return
+      try {
+        const r = await api.hardReset()
+        this.s.message = 'Hard reset — dropped ' + (r.removed || 0) + ' job(s).'
+        await this.refreshJobs()
+        await this.refreshRenders()
+      } catch (e) {
+        this.s.message = 'Reset error: ' + e.message
+      }
+    },
+    // A job whose plate has been deleted can never be re-rendered — the only
+    // sensible action left is to drop it.
+    async doRemoveJob(job) {
+      try {
+        await api.cancelJob(job.job_id)
+      } catch (e) { /* cancel may be refused by state; clear below regardless */ }
+      try {
+        await api.clearJobs(false)
+        await this.refreshJobs()
+        if (this.s.jobs.some((j) => j.job_id === job.job_id)) {
+          this.s.message = 'Could not drop ' + job.job_id + ' — use Hard reset.'
+        } else {
+          this.s.message = 'Removed ' + job.job_id + ' (its plate was deleted).'
+        }
+      } catch (e) {
+        this.s.message = 'Remove error: ' + e.message
+      }
+    },
+    async refreshRenders(quiet = false) {
+      if (!this.s.inAvid) return
+      // The helper does NOT hot-reload, so a running instance is often older
+      // than the panel. Feature-detect rather than firing a request that 404s.
+      if (!this.helperHasRenders) {
+        this.rendersError = 'Restart the AEBridge helper to enable this — the running one predates the Renders route.'
+        return
+      }
+      // A background poll must be invisible: showing "Reading…" every 4s makes
+      // the button flicker. Only a user-initiated Rescan shows progress.
+      if (!quiet) this.loadingRenders = true
+      try {
+        const next = await api.listRenders()
+        // Only reassign when the list actually changed, so Vue leaves the
+        // existing rows alone instead of re-rendering them on every poll.
+        if (sig(next) !== sig(this.s.renders)) this.s.renders = next
+        this.rendersError = ''
+      } catch (e) {
+        // Never fail silently: a Rescan that does nothing with no explanation
+        // is worse than an error.
+        this.rendersError = 'Could not read the render folder: ' + e.message
+        if (!quiet) this.s.message = this.rendersError
+      } finally {
+        if (!quiet) this.loadingRenders = false
+      }
+    },
+    formatSize(n) {
+      if (!n) return '0 B'
+      const mb = n / (1024 * 1024)
+      return mb >= 1 ? mb.toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB'
+    },
+    // Import any render file, matched to a job or not. This is what makes a
+    // second/third version out of one comp usable.
+    async doImportRender(r) {
+      if (!this.s.inAvid) {
+        this.s.message = 'Import needs Media Composer (MCAPI).'
+        return
+      }
+      this.importingRender = r.path
+      const bin = this.s.destBin
+      this.s.message = 'Importing ' + r.name + ' into ' + bin + '…'
+      try {
+        await tl.importReturn({ filePath: r.path, destBinPath: bin })
+        await api.markRenderImported(r.path)
+        // If it belongs to a job, close that job out too.
+        if (r.job_id) {
+          try { await api.markImported(r.job_id, bin) } catch (e) { /* already closed */ }
+        }
+        this.s.message = 'Imported ' + r.name + ' into ' + bin
+        await this.refreshRenders()
+        await this.refreshJobs()
+      } catch (e) {
+        this.s.message = 'Import error: ' + e.message
+      } finally {
+        this.importingRender = null
       }
     },
     async doSend() {
@@ -784,6 +1104,8 @@ export default {
 .plate.is-next .plate-track { color: var(--accent); border-color: var(--accent-line); }
 .plate-name { font-size: 12px; color: var(--ink-2); overflow-wrap: anywhere; }
 .plate-name.is-preview { color: var(--muted); font-style: italic; }
+.plate-done { display: flex; align-items: center; gap: 8px; }
+.job.is-orphan { border-color: var(--bad); }
 .eb-chip.is-on { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
 
 .log-toggle {
