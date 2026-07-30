@@ -17,7 +17,10 @@ carries hard-won MCAPI facts that cost days to learn. Then skim
 **Current state: the full grid works end to end, verified in Avid.** Single
 plate, vertical stack (one plate per video track, layered comp), and horizontal
 batch (IN/OUT marks over several shots → N jobs). Grab → export → AE comp →
-render → import back to bin, all confirmed on real MXF media.
+render → import back to bin, all confirmed on real MXF media. The most recent
+work (UI `2026-07-30.4`) was presentation only — a two-tier header, the three
+status pills rolled into one, and the app-name lockup — and is confirmed
+rendering correctly in Avid.
 
 **Non-negotiable facts (all detailed in HANDOFF.md — do not relearn these):**
 - MCAPI runs in the **panel WebView**, not the helper. Timeline code =
@@ -41,6 +44,15 @@ render → import back to bin, all confirmed on real MXF media.
   `PYTHONPATH=. python tests/test_smoke.py`.
 - Git runs natively on this Mac; the user usually commits themselves, so offer
   the command rather than pushing.
+- **You can see UI changes without Avid.** Compile `src/assets/scss/style.scss`
+  with `npx sass`, inline it with the SFC's scoped block around the real
+  markup, serve it over `localhost` and screenshot it in the browser. Avid's
+  WebView can't be reached, but everything visual can be checked this way —
+  do that rather than guessing at colours and spacing.
+- Design feedback may arrive as a claude.ai/design doc; read it with the
+  `DesignSync` MCP (`get_project` → `list_files` → `get_file`). **Read the
+  markup, not just the prose** — on the one imported so far they disagreed
+  twice, and the markup was right both times.
 
 **Suspect any remaining "can't be done" claim.** Three fell this session — the
 per-track fan, `DoCommand` being denied to panels (it was a missing manifest

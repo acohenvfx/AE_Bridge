@@ -336,9 +336,10 @@ MCAPI-dependent code can only be verified inside Media Composer (the `mcapi`
 global exists only in the Avid WebView). Build to EB patterns, add verbose
 logging, iterate with the user on real Avid results.
 
-## What shipped in the 2026-07-28/29 sessions
+## What shipped in the 2026-07-28/29/30 sessions
 
-Roughly in order. Everything below is verified in Avid unless marked otherwise.
+Roughly in order. **Everything below is verified in Avid**, including the
+2026-07-30 header work (confirmed rendering correctly in the Avid WebView).
 
 1. **Vertical plate stack.** One plate per video track over a shot, layered into
    one comp. Soloing is manual (see the isolation facts); **auto-grab** watches
@@ -353,8 +354,11 @@ Roughly in order. Everything below is verified in Avid unless marked otherwise.
 4. **Consumer simplification.** Jobs + Renders merged into one **Shots** list;
    Settings and Diagnostics behind disclosures; prefix/suffix kept in the main
    flow next to the plate names they affect.
-5. **Look.** App-name lockup, AE's periwinkle accent (hue 282) and a subtle
-   indigo lift on the surfaces; the vestigial sidebar removed.
+5. **Look (2026-07-29).** App-name lockup, AE's periwinkle accent (hue 282) and
+   a subtle indigo lift on the surfaces; the vestigial sidebar removed.
+6. **Two-tier header (2026-07-30),** from the *AEBridge Critique* design doc —
+   see the section below. Thin identity bar, three status pills rolled into one,
+   build stamp relocated to Diagnostics. Confirmed in Avid.
 
 **Approaches tried and REFUTED — do not retry these shapes:**
 
@@ -437,11 +441,34 @@ the N-job fan-out are all confirmed working.
 - Per-shot state lives on the range object (`sh.grabbed`, `sh.baseName`,
   `sh.shotMeta`) via `$set`, separate from the single-shot `s.grabbed`.
 
-## Panel layout — consumer simplification (UI `2026-07-29.7`)
+## Panel layout (UI `2026-07-29.7` → `2026-07-30.4`)
 
 Four always-visible things: **Current shot**, **Plate stack**, **Send**,
 **Shots**. Everything else is behind a disclosure. Nothing was removed —
 controls moved from *always visible* to *visible when relevant*.
+
+**The header is two tiers** (from the *AEBridge Critique* design doc — imported
+from claude.ai/design via the `DesignSync` MCP, project
+`cfa27e1a-300d-4176-a999-73c217219cbb`). Tier 1 is a thin identity bar on
+`--field-0`; the body carries everything that explains the tool. Its diagnosis
+was that the header fused app identity with live diagnostics — wordmark,
+version, Reset and three status pills competing in one strip.
+
+**Not everything in that doc was applied**, and the reasons matter if anyone
+re-reads it:
+
+- Its headline recommendation is an **eyebrow / title / description** beat. The
+  prose claims it, but tier 2 in the doc's own `1b` markup is **empty** — and the
+  user had explicitly asked for that text to be removed. Markup and user agreed;
+  only the prose dissented.
+- The prose says **Reset** moves to the content header, but it appears nowhere in
+  the `1b` markup and would have been silently lost. The user had explicitly
+  asked for Reset in the header. Kept there — it fits now the pills collapsed.
+- Its wordmark is a recreation of an **older** header. The current lockup is DE's
+  square chip + the critique's two-tone wordmark, at DE's larger scale.
+
+Lesson for the next design import: **read the markup, not just the prose** — they
+disagreed in two places here, and the markup was the better guide.
 
 - **Shots** replaces the separate Jobs and Renders lists. `shots` (computed)
   merges them by **shot name** — `JobView.shot_name` (added to the helper for
