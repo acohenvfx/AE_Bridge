@@ -2,12 +2,12 @@
   <div class="eb-tool">
     <div class="eb-tool-head">
       <div class="eb-tool-head-l">
-        <!-- Lockup matches the Difference Engine header: brand-colour chip,
-             name in a single weight, version in muted mono after it. -->
+        <!-- Lockup per the AEBridge Critique design doc: glowing brand dot,
+             two-tone wordmark, no version (the version reads as diagnostics, and
+             the identity bar is deliberately free of those now). -->
         <div class="eb-brand eb-brand--inline">
-          <span class="eb-brand-mark" aria-hidden="true"></span>
-          <h1 class="eb-brand-title">AE Bridge</h1>
-          <span class="eb-brand-ver eb-mono">v{{ panelVersion }}</span>
+          <span class="eb-brand-spark" aria-hidden="true"></span>
+          <h1 class="eb-brand-title">AE <b>Bridge</b></h1>
         </div>
       </div>
       <div class="eb-tool-head-r">
@@ -448,7 +448,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-07-30.1 · identity bar + status roll-up'
+const UI_BUILD = '2026-07-30.2 · two-tone wordmark'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -470,7 +470,7 @@ function sig(list) {
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, uiBuild: UI_BUILD, panelVersion: process.env.PANEL_VERSION || '0.0.1', picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', probing: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0 }
+    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', probing: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0 }
   },
   computed: {
     logText() {
@@ -1435,9 +1435,9 @@ export default {
 }
 
 /* App-name lockup — the only wordmark in the panel now that the sidebar is
-   gone. Styled to match the Difference Engine panel's header: a brand-colour
-   rounded chip, the name in one weight (not the two-tone EB wordmark), then the
-   panel version in muted mono. */
+   gone. Glowing brand dot + two-tone wordmark, per the AEBridge Critique doc.
+   (.eb-brand-spark and the `b` colouring already exist in style.scss; this only
+   strips the sidebar padding the originals assumed and sets the dot size.) */
 .eb-brand--inline {
   display: flex;
   align-items: center;
@@ -1447,28 +1447,22 @@ export default {
   text-align: left;
   margin: 0;
 }
-.eb-brand-mark {
-  width: 17px;
-  height: 17px;
-  border-radius: 5px;
-  background: var(--brand);
+.eb-brand--inline .eb-brand-spark {
+  width: 9px;
+  height: 9px;
+  margin-right: 0;
+  box-shadow: 0 0 12px 1px var(--brand);
   flex: none;
 }
 .eb-brand--inline .eb-brand-title {
   margin: 0;
-  font-size: 19px;
-  font-weight: 700;
+  font-size: 18px;
+  font-weight: 600;
   line-height: 1;
   letter-spacing: -0.01em;
   color: var(--ink);
   /* Docked narrow, the name must never break across two lines. Pills wrap. */
   white-space: nowrap;
-}
-.eb-brand-ver {
-  font-size: 11px;
-  color: var(--muted-2);
-  letter-spacing: 0.02em;
-  flex: none;
 }
 
 /* The rolled-up status pill carries a tint so "everything is live" is legible

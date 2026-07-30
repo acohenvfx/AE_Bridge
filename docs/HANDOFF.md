@@ -249,12 +249,15 @@ what is under the playhead, without grabbing anything.
   only when the log was collapsed, and the log now defaults open, so it would
   otherwise have vanished exactly when it is checked most.
 - **Branding / header.** The app name lives in `AEBridgePanel.vue`'s tool head
-  as an `.eb-brand--inline` lockup, styled to match the **Difference Engine**
-  panel: a brand-colour rounded chip (`.eb-brand-mark`), the name in a single
-  weight, then the panel version in muted mono (`.eb-brand-ver`, from
-  `process.env.PANEL_VERSION`). NOT the two-tone EB wordmark — that was the
-  earlier take. This is the only wordmark, and it restores the version display
-  lost when the sidebar went. The head also
+  as an `.eb-brand--inline` lockup: **glowing brand dot + two-tone wordmark**
+  (`AE <b>Bridge</b>`), per the *AEBridge Critique* doc. Reuses `.eb-brand-spark`
+  and the `.eb-brand-title b` colouring already in style.scss. **No version** —
+  it reads as diagnostics, and the identity bar is deliberately clear of those;
+  `PANEL_VERSION` is consequently not displayed anywhere (the UI build stamp in
+  the Diagnostics header is the one people actually check). Two earlier takes
+  were tried and dropped: an eyebrow/title/sub block (removed at the user's
+  request) and a Difference-Engine-style chip + single-weight name + version.
+  The head also
   centre-aligns its two columns and runs the status pills as one wrapping row;
   the shared styles assume a three-line eyebrow/title/sub on the left, which
   this panel no longer has.
@@ -281,7 +284,7 @@ what is under the playhead, without grabbing anything.
 - **UI build stamp:** `UI_BUILD` const in `AEBridgePanel.vue` renders as a header
   pill and logs on load. **Bump it on every UI change** so the user can tell
   which build the Avid WebView has cached (the WebView caches aggressively;
-  reopen the panel to force a fresh bundle). Current: `2026-07-30.1`.
+  reopen the panel to force a fresh bundle). Current: `2026-07-30.2`.
 - Project persistence (remembers last `.aep` across panel reloads AND helper
   restarts, re-registering the path for a fresh token).
 
