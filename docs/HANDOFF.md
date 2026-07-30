@@ -249,9 +249,11 @@ what is under the playhead, without grabbing anything.
   only when the log was collapsed, and the log now defaults open, so it would
   otherwise have vanished exactly when it is checked most.
 - **Branding / header.** The app name lives in `AEBridgePanel.vue`'s tool head
-  as an `.eb-brand--inline` lockup: **glowing brand dot + two-tone wordmark**
-  (`AE <b>Bridge</b>`), per the *AEBridge Critique* doc. Reuses `.eb-brand-spark`
-  and the `.eb-brand-title b` colouring already in style.scss. **No version** —
+  as an `.eb-brand--inline` lockup: **Difference-Engine-style rounded-square
+  chip (`.eb-brand-mark`, 21px) + the critique's two-tone wordmark**
+  (`AE <b>Bridge</b>`, 23px/700 — sized to match DE, which is noticeably larger
+  than the tool-title scale). Reuses the `.eb-brand-title b` colouring already in
+  style.scss. **No version** —
   it reads as diagnostics, and the identity bar is deliberately clear of those;
   `PANEL_VERSION` is consequently not displayed anywhere (the UI build stamp in
   the Diagnostics header is the one people actually check). Two earlier takes
@@ -284,7 +286,7 @@ what is under the playhead, without grabbing anything.
 - **UI build stamp:** `UI_BUILD` const in `AEBridgePanel.vue` renders as a header
   pill and logs on load. **Bump it on every UI change** so the user can tell
   which build the Avid WebView has cached (the WebView caches aggressively;
-  reopen the panel to force a fresh bundle). Current: `2026-07-30.2`.
+  reopen the panel to force a fresh bundle). Current: `2026-07-30.4`.
 - Project persistence (remembers last `.aep` across panel reloads AND helper
   restarts, re-registering the path for a fresh token).
 

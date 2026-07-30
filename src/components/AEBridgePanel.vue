@@ -2,11 +2,11 @@
   <div class="eb-tool">
     <div class="eb-tool-head">
       <div class="eb-tool-head-l">
-        <!-- Lockup per the AEBridge Critique design doc: glowing brand dot,
-             two-tone wordmark, no version (the version reads as diagnostics, and
-             the identity bar is deliberately free of those now). -->
+        <!-- Difference Engine's rounded-square chip + the critique's two-tone
+             wordmark. No version: it reads as diagnostics, and the identity bar
+             is deliberately clear of those. -->
         <div class="eb-brand eb-brand--inline">
-          <span class="eb-brand-spark" aria-hidden="true"></span>
+          <span class="eb-brand-mark" aria-hidden="true"></span>
           <h1 class="eb-brand-title">AE <b>Bridge</b></h1>
         </div>
       </div>
@@ -448,7 +448,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-07-30.2 · two-tone wordmark'
+const UI_BUILD = '2026-07-30.4 · larger lockup'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -1435,9 +1435,9 @@ export default {
 }
 
 /* App-name lockup — the only wordmark in the panel now that the sidebar is
-   gone. Glowing brand dot + two-tone wordmark, per the AEBridge Critique doc.
-   (.eb-brand-spark and the `b` colouring already exist in style.scss; this only
-   strips the sidebar padding the originals assumed and sets the dot size.) */
+   gone. Difference Engine's rounded-square chip, then the two-tone wordmark
+   (`.eb-brand-title b` colouring already exists in style.scss). This block only
+   strips the sidebar padding the originals assumed. */
 .eb-brand--inline {
   display: flex;
   align-items: center;
@@ -1447,17 +1447,17 @@ export default {
   text-align: left;
   margin: 0;
 }
-.eb-brand--inline .eb-brand-spark {
-  width: 9px;
-  height: 9px;
-  margin-right: 0;
-  box-shadow: 0 0 12px 1px var(--brand);
+.eb-brand-mark {
+  width: 21px;
+  height: 21px;
+  border-radius: 6px;
+  background: var(--brand);
   flex: none;
 }
 .eb-brand--inline .eb-brand-title {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 23px;
+  font-weight: 700;
   line-height: 1;
   letter-spacing: -0.01em;
   color: var(--ink);
