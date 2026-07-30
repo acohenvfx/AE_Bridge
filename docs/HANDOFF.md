@@ -238,8 +238,12 @@ what is under the playhead, without grabbing anything.
   (`PANEL_VERSION`) is no longer displayed anywhere — the head shows the UI build
   stamp and helper version instead.
 - **Branding / header.** The app name lives in `AEBridgePanel.vue`'s tool head
-  as an `.eb-brand--inline` lockup (`AE <b>Bridge</b>` — EB house style, second
-  word in the brand hue), and is now the only wordmark. The head also
+  as an `.eb-brand--inline` lockup, styled to match the **Difference Engine**
+  panel: a brand-colour rounded chip (`.eb-brand-mark`), the name in a single
+  weight, then the panel version in muted mono (`.eb-brand-ver`, from
+  `process.env.PANEL_VERSION`). NOT the two-tone EB wordmark — that was the
+  earlier take. This is the only wordmark, and it restores the version display
+  lost when the sidebar went. The head also
   centre-aligns its two columns and runs the status pills as one wrapping row;
   the shared styles assume a three-line eyebrow/title/sub on the left, which
   this panel no longer has.
@@ -266,7 +270,7 @@ what is under the playhead, without grabbing anything.
 - **UI build stamp:** `UI_BUILD` const in `AEBridgePanel.vue` renders as a header
   pill and logs on load. **Bump it on every UI change** so the user can tell
   which build the Avid WebView has cached (the WebView caches aggressively;
-  reopen the panel to force a fresh bundle). Current: `2026-07-29.21`.
+  reopen the panel to force a fresh bundle). Current: `2026-07-29.22`.
 - Project persistence (remembers last `.aep` across panel reloads AND helper
   restarts, re-registering the path for a fresh token).
 
@@ -316,49 +320,47 @@ MCAPI-dependent code can only be verified inside Media Composer (the `mcapi`
 global exists only in the Avid WebView). Build to EB patterns, add verbose
 logging, iterate with the user on real Avid results.
 
-## What just shipped (this session)
+## What shipped in the 2026-07-28/29 sessions
 
-The vertical multi-plate stack, via a **guided multi-pass grab** (UI
-`2026-07-28.9`). One intermediate approach was refuted in Avid along the way.
+Roughly in order. Everything below is verified in Avid unless marked otherwise.
 
-- **Refuted (UI `.6`):** treating the `enabled_tracks_only` result as a
-  per-track fan. With V1+V2 enabled, **one** plate reached AE showing **V2's**
-  picture — a flatten labelled `V1`. Do not retry this shape; see the corrected
-  MCAPI facts above.
-- **Also refuted (my own hypothesis, UI `.8`):** that `ExportEDL` might ignore
-  `track_list` or race on a reused file. It does neither — per-track paths and
-  counts are clean. Per-track *enumeration* is solid.
-- **Flatten guard:** before any grab, every *other* enabled video track is
-  checked via its own EDL for a clip under the playhead; if one exists the grab
-  **refuses**, naming the tracks to disable. `.6` lacked this and exported the
-  flatten silently.
-- **Guided multi-pass grab (NEEDS Avid verification):**
-  - `analyzeStack()` (timeline.js) enumerates every video track carrying a clip
-    under the playhead → the grab **plan**.
-  - `grabShot({ trackNumber, baseName })` grabs **one** plate; V1's pass reads
-    the marker and sets the base name, upper passes inherit it (`_plNN`).
-  - Panel "Plate stack" section lists the plan (V1 at the bottom, like the
-    timeline), walks the user track by track ("enable only V2 → Grab V2"), and
-    accumulates `s.grabbed`. Re-Analyze **unions** with the existing plan so it
-    can't drop pending plates if a disabled track goes unreported.
-  - Send exports each collected plate and ships `plates[]`. Grab and Send are
-    now **separate** steps (was one click).
-  - `plateOffsets()` is a pure function computing AE layer offsets =
-    (plate rec_in − its head handles) − (base rec_in − its head handles), so
-    per-plate handle clamping is compensated. Unit-tested outside Avid.
-- **Helper/AE (smoke-tested):** `SendRequest.plates[]` + `PlateRef`, per-plate
-  path-safety + size-stable wait, `Sidecar.plates`, and a JSX that layers
-  plates bottom→top with `layer.startTime = offset_frames/fps` (comp duration
-  from the base plate; upper-plate import failures surface as a text layer).
-  Smoke test: `test_multi_plate_send`.
-- Fixed a pre-existing smoke-test bug (`/tmp` symlink path comparison).
+1. **Vertical plate stack.** One plate per video track over a shot, layered into
+   one comp. Soloing is manual (see the isolation facts); **auto-grab** watches
+   the enable state so the editor never leaves the timeline.
+2. **Horizontal batch.** `Mark IN`/`Mark OUT` read from the sequence's mob
+   columns; one shot per V1 clip in range; **soloing is per TRACK, not per
+   shot**, so N shots × M tracks costs M solos; one Send fans out to N jobs.
+3. **Renders + versions.** Every file in the render folder is listed and
+   importable, so extra versions out of one comp are usable; per-shot version
+   dropdown with **Import all N**; orphaned jobs (plate deleted) offer Remove;
+   **Reset** in the header clears a wedged queue.
+4. **Consumer simplification.** Jobs + Renders merged into one **Shots** list;
+   Settings and Diagnostics behind disclosures; prefix/suffix kept in the main
+   flow next to the plate names they affect.
+5. **Look.** App-name lockup, AE's periwinkle accent (hue 282) and a subtle
+   indigo lift on the surfaces; the vestigial sidebar removed.
 
-### Prior session (verified in Avid)
-- V1-only grab via playhead+EDL; isolation via `enabled_tracks_only` (the
-  `track_list`-is-ignored discovery); flatten guard; source handles via
-  clip-bounds subclip + per-edge-clamped extend; V1-track marker nearest the
-  playhead; UI build stamp pill. Rejected: Match Frame (DoCommand
-  access-denied), master-subclip-by-source-TC (Format Descriptor errors).
+**Approaches tried and REFUTED — do not retry these shapes:**
+
+- Treating the `enabled_tracks_only` result as a **per-track fan**. With V1+V2
+  enabled, one plate reached AE showing V2's picture — a flatten labelled `V1`.
+- **`ExportEDL` ignoring `track_list` / racing on a reused file.** It does
+  neither; per-track paths and counts are clean. Per-track *enumeration* is
+  solid. (This was my own wrong hypothesis, and chasing it cost a build.)
+- **Driving track enable via `DoCommand`.** Accepted by Avid, but the enable
+  state never moves. Parked behind **Try auto-solo** in Diagnostics.
+- Earlier sessions: Match Frame via `DoCommand` (then thought to be denied
+  outright), and master-subclip-by-source-TC (Format Descriptor errors).
+
+**Three bugs worth remembering, because none were what the error said:**
+
+- `Invalid add_frame_at_head` was really an **out-of-range `head_frame`** (the
+  two frame spaces). It sent the hunt into the handle code twice.
+- A mid-chain **`v-else`** silently dropped every following branch, so the whole
+  MCAPI log rendered nothing — while looking fine. `yarn check:tpl` now catches
+  it.
+- A **stale helper** 404'd a new route and the panel swallowed it, so a control
+  did nothing with no explanation. Feature-gate every new route.
 
 ## Grabbing a stack — soloing is MANUAL (UI `2026-07-29.6`)
 
@@ -536,8 +538,13 @@ controls moved from *always visible* to *visible when relevant*.
 
 ## Git / gotchas
 
-- **Do git on the user's Mac**, not in the sandbox (virtio-fs leaves stale
-  `.git/*.lock` that jam Mac git; if seen: `find .git -name '*.lock' -delete`).
-  No credentials in the sandbox.
-- This session's work was committed on the user's Mac (V1 isolation + V1 marker).
-  Files touched: `src/utils/api/timeline.js`, `src/components/AEBridgePanel.vue`.
+- **Git runs natively here** — this repo is on the user's own Mac (APFS, not a
+  virtio-fs share), so `git` works normally from the session. Verified
+  2026-07-29. The older warning about doing git only on the user's Mac applied
+  to a sandboxed setup; if you ever DO see stale `.git/*.lock`, clear them with
+  `find .git -name '*.lock' -delete`.
+- The user usually commits/pushes themselves — offer the command rather than
+  pushing unasked, and never push without being asked.
+- **`tests/test_smoke.py` sandboxes every root** and asserts it at import time.
+  Do not weaken that: with only `AEBRIDGE_HOME` set, the tests wrote stub plates
+  and renders into the user's REAL `~/Desktop/AEBridge` folders (2026-07-29).

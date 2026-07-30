@@ -2,9 +2,12 @@
   <div class="eb-tool">
     <div class="eb-tool-head">
       <div class="eb-tool-head-l">
-        <!-- App name. EB house style via the shared .eb-brand-* classes. -->
+        <!-- Lockup matches the Difference Engine header: brand-colour chip,
+             name in a single weight, version in muted mono after it. -->
         <div class="eb-brand eb-brand--inline">
-          <h1 class="eb-brand-title">AE <b>Bridge</b></h1>
+          <span class="eb-brand-mark" aria-hidden="true"></span>
+          <h1 class="eb-brand-title">AE Bridge</h1>
+          <span class="eb-brand-ver eb-mono">v{{ panelVersion }}</span>
         </div>
       </div>
       <div class="eb-tool-head-r">
@@ -443,7 +446,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-07-29.21 · no sidebar, softer bg'
+const UI_BUILD = '2026-07-29.22 · DE-style header'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -465,7 +468,7 @@ function sig(list) {
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', probing: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0 }
+    return { s: state, uiBuild: UI_BUILD, panelVersion: process.env.PANEL_VERSION || '0.0.1', picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', probing: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0 }
   },
   computed: {
     logText() {
@@ -1409,24 +1412,40 @@ export default {
 }
 
 /* App-name lockup — the only wordmark in the panel now that the sidebar is
-   gone. .eb-brand/.eb-brand-title come from style.scss (EB house style: display
-   face, second word in the brand hue); this just strips the sidebar padding the
-   originals assumed. */
+   gone. Styled to match the Difference Engine panel's header: a brand-colour
+   rounded chip, the name in one weight (not the two-tone EB wordmark), then the
+   panel version in muted mono. */
 .eb-brand--inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 0;
   border-bottom: 0;
   text-align: left;
   margin: 0;
 }
+.eb-brand-mark {
+  width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  background: var(--brand);
+  flex: none;
+}
 .eb-brand--inline .eb-brand-title {
   margin: 0;
-  font-size: 24px;
+  font-size: 19px;
   font-weight: 700;
   line-height: 1;
   letter-spacing: -0.01em;
   color: var(--ink);
   /* Docked narrow, the name must never break across two lines. Pills wrap. */
   white-space: nowrap;
+}
+.eb-brand-ver {
+  font-size: 11px;
+  color: var(--muted-2);
+  letter-spacing: 0.02em;
+  flex: none;
 }
 
 /* The shared head styles assume a three-line eyebrow/title/sub on the left and
