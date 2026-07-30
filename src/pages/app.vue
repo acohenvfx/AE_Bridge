@@ -1,31 +1,8 @@
 <template>
   <div class="eb-app" :data-dir="direction" :data-group="activeGroup">
-    <aside class="eb-sidebar">
-      <div class="eb-brand">
-        <div class="eb-brand-kicker">ACOHENVFX</div>
-        <div class="eb-brand-title"><span class="eb-brand-spark"></span> AE<b>Bridge</b></div>
-      </div>
-      <nav class="eb-nav">
-        <div class="eb-group">
-          <div class="eb-links">
-            <button
-              v-for="t in tools"
-              :key="t.key"
-              class="eb-link"
-              :class="{ active: activeTool === t.key }"
-              @click="setTool(t.key)"
-            >
-              <span class="eb-link-dot"></span>{{ t.label }}
-            </button>
-          </div>
-        </div>
-      </nav>
-      <div class="eb-sidebar-foot">v{{ version }}</div>
-    </aside>
-
     <section class="eb-content">
       <div class="eb-content-scroll">
-        <AEBridgePanel v-if="activeTool === 'roundTrip'" />
+        <AEBridgePanel />
       </div>
     </section>
   </div>
@@ -35,14 +12,18 @@
 import panelToolShellMixin from '~/mixins/panelToolShellMixin'
 import AEBridgePanel from '~/components/AEBridgePanel.vue'
 
+// Single-tool panel: no sidebar. The nav/brand aside was vestigial (one tool,
+// one nav item) and it was hidden below 900px anyway, which is where this panel
+// usually sits docked in Avid. The app name lives in AEBridgePanel's tool head.
+// The mixin is kept for `activeGroup` (which drives the accent hue) and so more
+// tools can be registered later.
 export default {
   name: 'AppPage',
   components: { AEBridgePanel },
   mixins: [panelToolShellMixin],
   data() {
     return {
-      direction: 'vibrant',
-      version: process.env.PANEL_VERSION || '0.0.1'
+      direction: 'vibrant'
     }
   }
 }

@@ -229,12 +229,17 @@ what is under the playhead, without grabbing anything.
   entry count and an error count, so a failure stays visible without opening. The
   ring buffer always captures regardless — collapsing only hides the view, so
   asking the user to open it after a failure still yields the full history.
+- **No sidebar.** `src/pages/app.vue` is just the tool: the nav/brand aside was
+  vestigial (one tool, one nav item) and style.scss hid it below 900px anyway,
+  which is where the panel usually sits docked in Avid. The `.eb-sidebar`,
+  `.eb-nav` and `.eb-link*` rules are deleted; `.eb-brand*` stays because the
+  tool head uses it. `panelToolShellMixin` is kept for `activeGroup` (it drives
+  the accent hue) and for registering more tools later. The panel version
+  (`PANEL_VERSION`) is no longer displayed anywhere — the head shows the UI build
+  stamp and helper version instead.
 - **Branding / header.** The app name lives in `AEBridgePanel.vue`'s tool head
   as an `.eb-brand--inline` lockup (`AE <b>Bridge</b>` — EB house style, second
-  word in the brand hue). The shell's sidebar wordmark is suppressed
-  (`.eb-sidebar .eb-brand { display: none }`) because style.scss hides the whole
-  sidebar at `<=900px`, which is where the panel usually sits docked in Avid —
-  a wordmark there disappears exactly when it is needed. The head also
+  word in the brand hue), and is now the only wordmark. The head also
   centre-aligns its two columns and runs the status pills as one wrapping row;
   the shared styles assume a three-line eyebrow/title/sub on the left, which
   this panel no longer has.
@@ -261,7 +266,7 @@ what is under the playhead, without grabbing anything.
 - **UI build stamp:** `UI_BUILD` const in `AEBridgePanel.vue` renders as a header
   pill and logs on load. **Bump it on every UI change** so the user can tell
   which build the Avid WebView has cached (the WebView caches aggressively;
-  reopen the panel to force a fresh bundle). Current: `2026-07-29.20`.
+  reopen the panel to force a fresh bundle). Current: `2026-07-29.21`.
 - Project persistence (remembers last `.aep` across panel reloads AND helper
   restarts, re-registering the path for a fresh token).
 

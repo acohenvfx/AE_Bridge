@@ -2,10 +2,7 @@
   <div class="eb-tool">
     <div class="eb-tool-head">
       <div class="eb-tool-head-l">
-        <!-- App name only. EB house style: display face, second word in the
-             brand hue. Uses the shared .eb-brand-* classes from style.scss (EB
-             puts them in its sidebar; this panel has no sidebar, so the lockup
-             sits in the tool head instead). -->
+        <!-- App name. EB house style via the shared .eb-brand-* classes. -->
         <div class="eb-brand eb-brand--inline">
           <h1 class="eb-brand-title">AE <b>Bridge</b></h1>
         </div>
@@ -446,7 +443,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-07-29.20 · AE colour scheme'
+const UI_BUILD = '2026-07-29.21 · no sidebar, softer bg'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -1411,14 +1408,10 @@ export default {
   gap: 8px;
 }
 
-/* App-name lockup. The shell's sidebar carries a wordmark too, but style.scss
-   hides the sidebar at <=900px — which is where this panel usually sits when
-   docked in Avid, leaving no app name on screen at all. So the head owns the
-   name at every width and the sidebar's copy is suppressed (see style.scss),
-   rather than one appearing only on wide layouts.
-
-   .eb-brand is written for EB's sidebar (centred, padded, bottom border); in the
-   head it has to be a bare left-aligned lockup. */
+/* App-name lockup — the only wordmark in the panel now that the sidebar is
+   gone. .eb-brand/.eb-brand-title come from style.scss (EB house style: display
+   face, second word in the brand hue); this just strips the sidebar padding the
+   originals assumed. */
 .eb-brand--inline {
   padding: 0;
   border-bottom: 0;
