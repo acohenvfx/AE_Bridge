@@ -11,25 +11,23 @@
         </div>
       </div>
       <div class="eb-tool-head-r">
+        <!-- ONE rolled-up status pill instead of three per-service ones: the
+             identity bar should say "is the bridge live?", not enumerate
+             subsystems. Specifics stay in the tooltip and in Diagnostics. -->
+        <button
+          class="eb-env-pill eb-env-pill--status"
+          :class="{ 'is-bad': !statusOk }"
+          :title="statusDetail"
+          @click="statusOk ? null : showAeDiag()"
+        >
+          <span class="eb-env-dot" :class="{ 'is-bad': !statusOk }"></span>
+          {{ statusSummary }}
+        </button>
         <button
           class="eb-btn eb-btn--ghost eb-btn--mini"
           title="Drop every job whatever its state. Files on disk are untouched, and renders you already imported stay imported."
           @click="doHardReset"
         >Reset</button>
-        <div class="eb-env-pill" :title="'UI build ' + uiBuild">UI {{ uiBuild }}</div>
-        <div class="eb-env-pill" :class="{ 'is-bad': !s.helper.online }">
-          <span class="eb-env-dot" :class="{ 'is-bad': !s.helper.online }"></span>
-          {{ s.helper.online ? 'helper v' + s.helper.version : 'helper offline' }}
-        </div>
-        <button
-          class="eb-env-pill"
-          :class="{ 'is-bad': !s.ae.found }"
-          :title="s.ae.found ? '' : 'Click for diagnostics'"
-          @click="s.ae.found ? null : showAeDiag()"
-        >
-          <span class="eb-env-dot" :class="{ 'is-bad': !s.ae.found }"></span>
-          {{ s.ae.found ? 'AE ' + s.ae.version : 'AE not found — why?' }}
-        </button>
       </div>
     </div>
 
@@ -386,7 +384,11 @@
           <button class="log-toggle" :aria-expanded="String(s.logOpen)" @click="s.logOpen = !s.logOpen">
             <span class="log-caret" :class="{ 'is-open': s.logOpen }">›</span>
             <h3 class="eb-section-title" style="margin:0">Diagnostics</h3>
-            <span v-if="logEntries.length" class="eb-muted" style="font-size:11px">{{ logEntries.length }}</span>
+            <!-- The build stamp lives here now that it is out of the identity
+                 bar. ALWAYS visible (not just when collapsed) — it is how the
+                 user confirms which bundle the Avid WebView actually loaded. -->
+            <span class="eb-muted eb-mono" style="font-size:11px">{{ uiBuild }}</span>
+            <span v-if="logEntries.length" class="eb-muted" style="font-size:11px">· {{ logEntries.length }}</span>
             <span v-if="!s.logOpen && logErrorCount" class="c-bad" style="font-size:11px">· {{ logErrorCount }} error{{ logErrorCount === 1 ? '' : 's' }}</span>
           </button>
           <div class="eb-actions">
@@ -412,7 +414,7 @@
           </div>
         </div>
         <div v-if="!s.logOpen" class="eb-muted" style="font-size:11.5px">
-          Build {{ uiBuild }} · open when something needs diagnosing.
+          Open when something needs diagnosing.
         </div>
         <!-- These are SEPARATE v-ifs, not one chain. Inserting this actions row
              as a `v-else` previously swallowed the open case and left the
@@ -446,7 +448,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-07-29.22 · DE-style header'
+const UI_BUILD = '2026-07-30.1 · identity bar + status roll-up'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -534,6 +536,27 @@ export default {
     rangeReadyCount() {
       if (!this.s.range) return 0
       return this.s.range.shots.filter((sh) => (sh.grabbed || []).length && sh.shotMeta).length
+    },
+    // The identity bar answers one question: is the bridge live? Anything
+    // that is NOT fine gets named, because that's the actionable case.
+    statusOk() {
+      return this.s.inAvid && this.s.helper.online && this.s.ae.found
+    },
+    statusSummary() {
+      if (!this.s.inAvid) return 'Not in Media Composer'
+      if (!this.s.helper.online) return 'Helper offline'
+      if (!this.s.ae.found) return 'After Effects not found'
+      return 'Helper & AE ready · MCAPI live'
+    },
+    // The per-service detail the three pills used to show, kept on hover.
+    statusDetail() {
+      const bits = [
+        this.s.helper.online ? 'helper v' + this.s.helper.version : 'helper offline',
+        this.s.ae.found ? 'AE ' + this.s.ae.version : 'AE not found — click for diagnostics',
+        this.s.inAvid ? 'MCAPI live' : 'MCAPI unavailable',
+        'UI ' + this.uiBuild,
+      ]
+      return bits.join('\n')
     },
     settingsSummary() {
       const bits = [this.s.handles + 'f handles']
@@ -1448,11 +1471,35 @@ export default {
   flex: none;
 }
 
-/* The shared head styles assume a three-line eyebrow/title/sub on the left and
-   a stacked status column on the right. With just the name on the left, a
-   four-row pill tower made the two sides badly lopsided — so the status items
-   run as one wrapping row and both sides share a centre line. */
-.eb-tool-head { align-items: center; }
+/* The rolled-up status pill carries a tint so "everything is live" is legible
+   at a glance, and turns to the danger role when something needs attention. */
+.eb-env-pill--status {
+  color: var(--ink-2);
+  background: rgba(52, 211, 153, 0.1);
+  border-color: rgba(52, 211, 153, 0.35);
+  cursor: default;
+}
+.eb-env-pill--status.is-bad {
+  background: rgba(251, 113, 133, 0.1);
+  border-color: rgba(251, 113, 133, 0.4);
+  cursor: pointer;
+}
+
+/* Section cards sit slightly darker than the panel so the stack of them reads
+   as distinct surfaces rather than one flat field. */
+.eb-section { background: rgba(10, 15, 22, 0.33); }
+
+/* Two-tier header (per the AEBridge Critique design doc): tier 1 is a thin
+   IDENTITY bar — wordmark, one rolled-up status pill, Reset — sitting on a
+   darker ground so it reads as chrome rather than content. Everything that
+   explains the tool lives below it in the body. The shared styles assume a
+   three-line eyebrow/title/sub on the left and a stacked status column on the
+   right; neither applies here. */
+.eb-tool-head {
+  align-items: center;
+  padding: 14px 22px;
+  background: var(--field-0);
+}
 .eb-tool-head-l { flex: none; }
 .eb-tool-head-r {
   flex-direction: row;

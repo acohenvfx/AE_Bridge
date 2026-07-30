@@ -237,6 +237,17 @@ what is under the playhead, without grabbing anything.
   the accent hue) and for registering more tools later. The panel version
   (`PANEL_VERSION`) is no longer displayed anywhere — the head shows the UI build
   stamp and helper version instead.
+- **Two-tier header** (from the *AEBridge Critique* design doc, 2026-07-30).
+  Tier 1 is a thin **identity bar** on `--field-0`: wordmark, **one rolled-up
+  status pill**, Reset. The three per-service pills (helper / AE / UI build)
+  collapsed into a single `statusSummary` — the bar answers "is the bridge
+  live?" rather than enumerating subsystems. It names whatever is actually
+  wrong (`Helper offline`, `After Effects not found`, `Not in Media Composer`)
+  and stays clickable to the AE diagnostics in that state; the per-service
+  detail lives in the pill's `title`. **The UI build stamp moved to the
+  Diagnostics section header and is ALWAYS shown there** — it used to render
+  only when the log was collapsed, and the log now defaults open, so it would
+  otherwise have vanished exactly when it is checked most.
 - **Branding / header.** The app name lives in `AEBridgePanel.vue`'s tool head
   as an `.eb-brand--inline` lockup, styled to match the **Difference Engine**
   panel: a brand-colour rounded chip (`.eb-brand-mark`), the name in a single
@@ -270,7 +281,7 @@ what is under the playhead, without grabbing anything.
 - **UI build stamp:** `UI_BUILD` const in `AEBridgePanel.vue` renders as a header
   pill and logs on load. **Bump it on every UI change** so the user can tell
   which build the Avid WebView has cached (the WebView caches aggressively;
-  reopen the panel to force a fresh bundle). Current: `2026-07-29.22`.
+  reopen the panel to force a fresh bundle). Current: `2026-07-30.1`.
 - Project persistence (remembers last `.aep` across panel reloads AND helper
   restarts, re-registering the path for a fresh token).
 
