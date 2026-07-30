@@ -5,15 +5,15 @@
 
 :root {
   /* Backgrounds / surfaces */
-  --field-0: #0a111d;
-  --field-1: #0c1422;
-  --panel-1: #101a28;
+  --field-0: #020c31;
+  --field-1: #041136;
+  --panel-1: #07163c;
   --panel-2: #14213353;
-  --panel-solid: #122031;
-  --input-bg: #0d1825;
-  --input-bg-2: #0f1826;
-  --line: rgba(120, 148, 180, 0.16);
-  --line-strong: rgba(120, 148, 180, 0.28);
+  --panel-solid: #0c1c42;
+  --input-bg: #051338;
+  --input-bg-2: #061439;
+  --line: rgba(146, 152, 220, 0.18);
+  --line-strong: rgba(146, 152, 220, 0.30);
 
   /* Text */
   --ink: #eef5fb;
@@ -27,8 +27,14 @@
   --warn: #fbbf24;
   --bad: #fb7185;
 
-  /* Brand (AEBridge violet→cyan) */
-  --brand-h: 275;
+  /* Brand: After Effects' own periwinkle. Sampled from the AE app icon —
+     #9A9AFF is oklch(0.728 0.145 282), which lands almost exactly on this
+     stylesheet's existing accent recipe (L .74 / C .15), so matching AE is
+     purely a hue change. One hue drives every accent: --gh -> --ah ->
+     --accent/-soft/-line/--glow. Keep it clear of the status families —
+     green is --ok, amber is --warn, pink-red is --bad, and an accent sharing
+     one of those blurs what a status means. */
+  --brand-h: 282;
   --brand: oklch(0.74 0.16 var(--brand-h));
 
   /* Accent layer */
@@ -48,7 +54,7 @@
   --r-pill: 999px;
   --shadow-card: 0 18px 50px -28px rgba(0, 0, 0, 0.8);
   --glow: 0 0 24px -6px oklch(var(--accent-l) var(--accent-c) var(--ah) / 0.55);
-  --backdrop: radial-gradient(120% 90% at 100% -5%, #16243c 0%, #0e1a2e 46%, #0a1320 100%);
+  --backdrop: radial-gradient(120% 90% at 100% -5%, #15274d 0%, #08173c 46%, #030f33 100%);
 
   /* Typography */
   --font-display: 'Space Grotesk', system-ui, sans-serif;
@@ -56,8 +62,10 @@
   --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
 }
 
-/* Group hues — AEBridge is a single-product panel; 'bridge' = violet. */
-[data-group='bridge'] { --gh: 275; }
+/* Group hues — AEBridge is a single-product panel; 'bridge' tracks the brand.
+   Leave this as var(--brand-h), or changing --brand-h colours the wordmark but
+   not the accents. */
+[data-group='bridge'] { --gh: var(--brand-h); }
 [data-group='editorial'] { --gh: 244; }
 [data-group='vfx'] { --gh: 52; }
 [data-group='workflow'] { --gh: 158; }
@@ -91,6 +99,11 @@ body {
   border-right: 1px solid var(--line);
 }
 .eb-brand { padding: 20px 18px; border-bottom: 1px solid var(--line); }
+/* The sidebar's wordmark is suppressed: AEBridgePanel's tool head carries the
+   app name at every width (the sidebar itself is hidden <=900px, so a wordmark
+   there would vanish exactly when the panel is docked). Restore this if the
+   shell ever grows a real multi-tool sidebar. */
+.eb-sidebar .eb-brand { display: none; }
 .eb-brand-kicker {
   font-family: var(--font-mono);
   font-size: 10px;

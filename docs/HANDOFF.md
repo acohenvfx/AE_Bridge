@@ -229,10 +229,39 @@ what is under the playhead, without grabbing anything.
   entry count and an error count, so a failure stays visible without opening. The
   ring buffer always captures regardless — collapsing only hides the view, so
   asking the user to open it after a failure still yields the full history.
+- **Branding / header.** The app name lives in `AEBridgePanel.vue`'s tool head
+  as an `.eb-brand--inline` lockup (`AE <b>Bridge</b>` — EB house style, second
+  word in the brand hue). The shell's sidebar wordmark is suppressed
+  (`.eb-sidebar .eb-brand { display: none }`) because style.scss hides the whole
+  sidebar at `<=900px`, which is where the panel usually sits docked in Avid —
+  a wordmark there disappears exactly when it is needed. The head also
+  centre-aligns its two columns and runs the status pills as one wrapping row;
+  the shared styles assume a three-line eyebrow/title/sub on the left, which
+  this panel no longer has.
+- **Palette matches After Effects** (2026-07-29). Sampled from the AE app icon:
+  the glyph `#9A9AFF` is `oklch(0.728 0.145 282)`, which lands almost exactly on
+  this stylesheet's existing accent recipe (L .74 / C .15) — so matching AE's
+  accent was purely a **hue** change. The icon's background `#00005B` is
+  `oklch(0.213 0.148 264)`: the same *lightness* as the old surfaces but ~3.5x
+  the chroma. Surfaces now sit at **hue 264, chroma 0.075** — each keeping its
+  original lightness, only hue/chroma moved. Deliberately short of AE's full
+  0.148: past ~0.11 the cards stop separating from the backdrop and the slate
+  text ramp (`--muted`, `--faint`, tuned for a desaturated ground) goes dim.
+  Retune that ramp first if anyone wants to go deeper. Hairlines were re-tinted
+  blue to match.
+- **Brand hue is ONE number:** `--brand-h` in `style.scss` (now **282**, AE's
+  periwinkle). It feeds `--gh -> --ah -> --accent/-soft/-line/--glow`, so changing it
+  restyles every accent. Two gotchas: (1) `[data-group='bridge']` must stay
+  `var(--brand-h)` or the wordmark changes but the accents do not; (2) the
+  `--accent*` vars are declared on `:root` and therefore already substituted, so
+  overriding `--brand-h` on a descendant does nothing — redeclare the derived
+  set if you ever need a local override. Keep the hue **out of the green / amber
+  / pink-red families**: those are `--ok`, `--warn` and `--bad`, and an accent
+  sharing them blurs what a status means.
 - **UI build stamp:** `UI_BUILD` const in `AEBridgePanel.vue` renders as a header
   pill and logs on load. **Bump it on every UI change** so the user can tell
   which build the Avid WebView has cached (the WebView caches aggressively;
-  reopen the panel to force a fresh bundle). Current: `2026-07-29.18`.
+  reopen the panel to force a fresh bundle). Current: `2026-07-29.20`.
 - Project persistence (remembers last `.aep` across panel reloads AND helper
   restarts, re-registering the path for a fresh token).
 

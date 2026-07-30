@@ -446,7 +446,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-07-29.18 · AE Bridge lockup'
+const UI_BUILD = '2026-07-29.20 · AE colour scheme'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -1411,8 +1411,14 @@ export default {
   gap: 8px;
 }
 
-/* .eb-brand is written for EB's sidebar (centred, padded, bottom border).
-   Inside the tool head it needs to be a bare left-aligned lockup. */
+/* App-name lockup. The shell's sidebar carries a wordmark too, but style.scss
+   hides the sidebar at <=900px — which is where this panel usually sits when
+   docked in Avid, leaving no app name on screen at all. So the head owns the
+   name at every width and the sidebar's copy is suppressed (see style.scss),
+   rather than one appearing only on wide layouts.
+
+   .eb-brand is written for EB's sidebar (centred, padded, bottom border); in the
+   head it has to be a bare left-aligned lockup. */
 .eb-brand--inline {
   padding: 0;
   border-bottom: 0;
@@ -1426,11 +1432,23 @@ export default {
   line-height: 1;
   letter-spacing: -0.01em;
   color: var(--ink);
-  /* The panel gets docked narrow in Avid; the name must never break across
-     two lines. The status pills wrap instead. */
+  /* Docked narrow, the name must never break across two lines. Pills wrap. */
   white-space: nowrap;
 }
+
+/* The shared head styles assume a three-line eyebrow/title/sub on the left and
+   a stacked status column on the right. With just the name on the left, a
+   four-row pill tower made the two sides badly lopsided — so the status items
+   run as one wrapping row and both sides share a centre line. */
+.eb-tool-head { align-items: center; }
 .eb-tool-head-l { flex: none; }
+.eb-tool-head-r {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
 
 .name-affix { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .name-affix .eb-input { flex: 1; min-width: 0; }
