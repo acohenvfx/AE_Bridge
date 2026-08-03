@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from service.app import app  # noqa: E402
 from service.config import settings  # noqa: E402
 import service.integrations.ae as _ae  # noqa: E402
+from service.routers import aebridge as _aebridge  # noqa: E402
 
 # Fail loudly rather than touch anything real. This runs at import time, before
 # any test can write a file.
@@ -37,6 +38,15 @@ for _r in settings.roots.all_roots():
 # contract is exercisable. (These are proven separately on macOS.)
 _ae.launch_ae = lambda *a, **k: None
 _ae.make_placeholder_plate = lambda *a, **k: False
+# Route smoke tests use placeholder bytes instead of a real movie. The actual
+# ffprobe parsing and mismatch behavior live in test_media_validation.py.
+_aebridge.probe_video = lambda *a, **k: {
+    "frame_rate": 23.976,
+    "frame_rate_raw": "24000/1001",
+    "width": 1920,
+    "height": 1080,
+    "frame_count": 90,
+}
 
 client = TestClient(app)
 
@@ -82,6 +92,31 @@ def test_new_per_shot_roundtrip():
         r = c.post(f"/v1/aebridge/return/{job_id}/swap")
         assert r.status_code == 200, r.text
         assert r.json()["state"] == "done"
+
+
+def test_specific_render_validation_does_not_close_job():
+    """Loose render versions validate against the sidecar without changing job state."""
+    _seed_template()
+    with TestClient(app) as c:
+        r = c.post(
+            "/v1/aebridge/send",
+            json={
+                "template_id": "__blank__",
+                "shot": {"shot_name": "SHOT_VALIDATE", "frame_rate": "23.976", "frame_count": 90},
+            },
+        )
+        assert r.status_code == 200, r.text
+        job_id = r.json()["job_id"]
+        render = settings.roots.watch_root / f"{job_id}_v2.mov"
+        render.write_bytes(b"RENDER")
+
+        r = c.post(
+            f"/v1/aebridge/return/{job_id}/validate-render",
+            json={"path": str(render)},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["rate_ok"] is True
+        assert _get_job(job_id).state == _JobState.ready_in_ae
 
 
 def test_existing_project_requires_token():

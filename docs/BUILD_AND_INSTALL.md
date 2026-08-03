@@ -13,6 +13,59 @@ Two independent delivery paths, same as EB: **UI** (Nuxt) and **helper** (Python
 - **Node 16** (`.nvmrc` pins 16.20.2) + **Yarn** for the panel UI.
 - **Python 3** for the helper.
 
+## Compatibility (Media Composer versions)
+
+**Minimum: Media Composer 2024.12 (LTM). Recommended: 2025.12.1.** Any license
+tier — panels run on all licenses from MC 2024.6 onward (older than 2024.6
+requires Ultimate or Enterprise). AEBridge is built and tested against Panel SDK
+Drop 16 (aligned with MC 2025.12.1), which guarantees every code path behaves as
+built.
+
+**Why 2024.12 is the practical floor** (not 2024.2, where the APIs technically
+first appear): MC 2024.12 (Drop 12) upgraded the embedded WebView from Chromium
+87 to **Chromium 108** and added native Apple-Silicon support. The panel is a
+modern Nuxt 2 build, so the older Chromium 87 in 2024.6 and earlier is a real
+UI-rendering risk; 2024.12 removes it — and it's the **LTM (Long Term
+Maintenance)** release, stable and widely deployed.
+
+Requirements are tiered by which MCAPI calls each feature uses (source: Panel SDK
+`releases.md`, drop → MC version):
+
+- **Core round-trip (single / stack / batch): MC 2024.2 API-wise, 2024.12 in
+  practice.** The pipeline depends on `CreateSubClip` (Drop 9 / MC 2024.2);
+  everything else it uses predates that (`GetMobTrackInfo`, `ExportEDL`,
+  `GetListOfExportSettings`, `GetMarkers`, `GetViewerMobs`, `ImportFile`,
+  `SetMobInfo`). Runs fully on 2024.12; the Chromium-87 WebView is why 2024.12,
+  not 2024.2, is the real floor.
+- **`DoCommand`-based features need MC 2025.6 (Drop 13), reliable at 2025.12
+  (Drop 15).** `GetListOfCommands` / `IsCommandsEnabled` / `DoCommand` arrived in
+  Drop 13 / MC 2025.6; below that they return "method not found," so the
+  Diagnostics **auto-solo** and any command-driven track toggling don't exist
+  (AEBridge's code calls these — on 2024.12 those paths must be version-gated).
+  They only became reliable with `MakeWindowActive` in Drop 15 / MC 2025.12.
+  Since the shipped flow is manual-solo, no *working* feature is lost below
+  2025.6 — only the unfinished auto-solo experiment.
+- **Per-track marker isolation — NEEDS VERIFICATION on 2024.12.** The
+  `GetMarkers` track filter + `track_label` on the response — which makes a
+  stacked shot take V1's marker comment, not a higher track's — is present in the
+  Drop 16 proto but **not called out in any release note**, so its introduction
+  version is unknown. If it postdates 2024.12, stacked-shot naming there falls
+  back to the nearest-marker heuristic without track isolation (the bug fixed on
+  2025.12.1). **Test stacked-shot naming on a real 2024.12 box before committing
+  to it as the floor.** Correct stacked naming is confirmed only on 2025.12.1.
+- **Minor Drop 16 conveniences (MC 2025.12.1).** `ExportFile`/`ImportFile`
+  using current-or-default settings when none are provided (only matters if you
+  Send with no export setting chosen); `GetViewerMobs` returning bin-loaded mob
+  ids; `GetListOfBinItems` absolute+relative path support (24.12.6). AEBridge
+  already probes multiple bin-path spellings and normally passes an explicit
+  export setting, so these rarely bite.
+
+**Net:** the full shipped round-trip runs on **2024.12 (LTM)** with a modern
+WebView; there you give up auto-solo (needs 2025.6) and must verify stacked
+marker naming. Ship against **2025.12.1** to get every path — including
+marker-track naming and command reliability — as designed. The absolute floor for *any* Avid
+panel to load at all is MC 2023.8 (`faq.md`).
+
 ## Panel UI (Nuxt 2)
 
 ```bash

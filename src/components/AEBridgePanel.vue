@@ -148,13 +148,6 @@
             <span class="eb-mono">{{ s.stackTC }}</span>.
             Avid can only export one video track at a time, so each plate is grabbed in its own pass.
           </div>
-          <!-- Naming lives with the names it changes: the plate rows below
-               update live as these are typed. -->
-          <div class="name-affix">
-            <input v-model="s.prefix" class="eb-input" placeholder="prefix" aria-label="Plate name prefix" />
-            <span class="eb-muted eb-mono" style="font-size:11.5px; white-space:nowrap">shot name</span>
-            <input v-model="s.suffix" class="eb-input" placeholder="suffix" aria-label="Plate name suffix" />
-          </div>
           <div class="plates">
             <div v-for="p in s.stack" :key="p.track" class="plate" :class="{ 'is-done': isGrabbed(p.track), 'is-next': nextTrack === p.track }">
               <div class="plate-l">
@@ -205,6 +198,28 @@
         </div>
       </div>
 
+      <div class="eb-section eb-rename-panel">
+        <div class="eb-section-head">
+          <div>
+            <h3 class="eb-section-title">Renaming</h3>
+            <div class="eb-muted eb-rename-copy">Applied to exported plate and shot filenames; Avid subclips keep the marker name.</div>
+          </div>
+        </div>
+        <div class="eb-grid cols-2">
+          <div class="eb-field">
+            <label class="eb-label">Name prefix</label>
+            <input v-model="s.prefix" class="eb-input" placeholder="(optional)" aria-label="Plate name prefix" />
+          </div>
+          <div class="eb-field">
+            <label class="eb-label">Name suffix</label>
+            <input v-model="s.suffix" class="eb-input" placeholder="(optional)" aria-label="Plate name suffix" />
+          </div>
+        </div>
+        <div v-if="s.prefix || s.suffix" class="eb-muted eb-rename-preview">
+          Plate name → <span class="eb-mono">{{ s.prefix }}&lt;shot&gt;{{ s.suffix }}</span>
+        </div>
+      </div>
+
       <div class="eb-actions">
         <button class="eb-btn eb-btn--primary eb-btn--wide" :disabled="s.sending || !canSend" @click="doSend">
           {{ s.sending ? 'Sending…' : sendLabel }}
@@ -222,7 +237,7 @@
             <span class="eb-muted" style="font-size:11px">{{ settingsSummary }}</span>
           </button>
         </div>
-        <div v-if="s.settingsOpen">
+        <div v-if="s.settingsOpen" class="eb-settings-body">
           <div class="eb-grid cols-2">
             <!-- Template picker is hidden while __blank__ is the only option;
                  s.templateId still flows to /send. It reappears if real
@@ -380,7 +395,7 @@
       </div>
 
       <div class="eb-section">
-        <div class="eb-section-head">
+        <div class="eb-section-head eb-diagnostics-head">
           <button class="log-toggle" :aria-expanded="String(s.logOpen)" @click="s.logOpen = !s.logOpen">
             <span class="log-caret" :class="{ 'is-open': s.logOpen }">›</span>
             <h3 class="eb-section-title" style="margin:0">Diagnostics</h3>
@@ -399,6 +414,13 @@
               title="Test whether this panel may drive Avid commands (needs the avid.mediacomposer.command scope)"
               @click="doProbeCommands"
             >{{ probing ? 'Probing…' : 'Probe commands' }}</button>
+            <button
+              v-if="s.inAvid"
+              class="eb-btn eb-btn--ghost eb-btn--mini"
+              :disabled="selectingScratch"
+              title="Select all subclips in AEBridge_Scratch so you can review and delete them in Avid"
+              @click="doSelectScratch"
+            >{{ selectingScratch ? 'Selecting…' : 'Select scratch' }}</button>
             <!-- Parked experiment: driving the track selectors via DoCommand.
                  Avid accepts the command but the enable state never moves. Kept
                  here (not in the grab flow) so it can be retested cheaply. -->
@@ -406,7 +428,7 @@
               v-if="s.inAvid && s.stack.length && nextTrack !== null"
               class="eb-btn eb-btn--ghost eb-btn--mini"
               :disabled="grabbingAll || s.grabbingTrack !== null"
-              title="Experimental: have Avid solo each track itself. Known not to work — logs a full before/after diagnosis."
+              title="Experimental: have Avid solo each track, verify its enable state, and restore the original state. Run with the timeline focused; logs a full before/after diagnosis."
               @click="doGrabAll"
             >{{ grabbingAll ? 'Trying…' : 'Try auto-solo' }}</button>
             <button class="eb-btn eb-btn--ghost eb-btn--mini" @click="copyLog">{{ copied ? 'Copied ✓' : 'Copy' }}</button>
@@ -448,7 +470,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-07-30.4 · larger lockup'
+const UI_BUILD = '2026-08-03.5 · auto-solo diagnostics'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -470,7 +492,7 @@ function sig(list) {
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', probing: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0 }
+    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', probing: false, selectingScratch: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0 }
   },
   computed: {
     logText() {
@@ -568,6 +590,9 @@ export default {
     // hot-reload, so this is routinely false until the user restarts it.
     helperHasRenders() {
       return (this.s.helperFeatures || []).includes('aebridge.renders')
+    },
+    helperHasReturnValidation() {
+      return (this.s.helperFeatures || []).includes('aebridge.return_validation')
     },
     // Lowest track not yet grabbed — grabbed bottom-up so V1's marker names the stack.
     nextTrack() {
@@ -754,7 +779,8 @@ export default {
       try {
         const r = await tl.probeCommands()
         this.s.message = 'Commands available: ' + r.commands.length +
-          ' (' + r.trackRelated.length + ' track-related) — see the Log.'
+          ' (' + r.trackRelated.length + ' track-related, ' +
+          r.cleanupRelated.length + ' cleanup candidates) — see the Log.'
       } catch (e) {
         this.s.message = 'Command probe failed: ' + e.message +
           (/code=7/.test(e.message)
@@ -762,6 +788,23 @@ export default {
             : '')
       } finally {
         this.probing = false
+      }
+    },
+    async doSelectScratch() {
+      this.selectingScratch = true
+      this.s.message = 'Finding scratch subclips…'
+      try {
+        const r = await tl.selectScratchSubclips()
+        if (!r.count) {
+          this.s.message = 'AEBridge_Scratch is empty.'
+        } else {
+          this.s.message = 'Selected ' + r.count + ' scratch subclip' +
+            (r.count === 1 ? '' : 's') + '. Review them, then press Delete in Avid.'
+        }
+      } catch (e) {
+        this.s.message = 'Could not select scratch subclips: ' + e.message
+      } finally {
+        this.selectingScratch = false
       }
     },
     // --- plate stack ---
@@ -1193,6 +1236,16 @@ export default {
       const bin = this.s.destBin
       if (!quiet) this.s.message = 'Importing ' + r.name + ' into ' + bin + '…'
       try {
+        // Renders with a matching job have sidecar expectations, including
+        // re-rendered versions. Orphan files remain manually importable
+        // because there is no trustworthy shot metadata to compare against.
+        if (r.job_id) {
+          if (!this.helperHasReturnValidation) {
+            this.s.message = 'Restart the AEBridge helper to enable return validation.'
+            return false
+          }
+          await api.validateRender(r.job_id, r.path)
+        }
         await tl.importReturn({ filePath: r.path, destBinPath: bin })
         await api.markRenderImported(r.path)
         // If it belongs to a job, close that job out too.
@@ -1353,6 +1406,11 @@ export default {
       const bin = this.s.destBin
       this.s.message = 'Importing render into ' + bin + '…'
       try {
+        if (!this.helperHasReturnValidation) {
+          this.s.message = 'Restart the AEBridge helper to enable return validation.'
+          return
+        }
+        await api.validateReturn(job.job_id)
         await tl.importReturn({ filePath: job.return_path, destBinPath: bin })
         await api.markImported(job.job_id, bin)
         this.s.message = 'Imported ' + job.job_id + ' into ' + bin
@@ -1482,6 +1540,10 @@ export default {
 /* Section cards sit slightly darker than the panel so the stack of them reads
    as distinct surfaces rather than one flat field. */
 .eb-section { background: rgba(10, 15, 22, 0.33); }
+.eb-settings-body { display: flex; flex-direction: column; gap: 16px; }
+.eb-diagnostics-head { align-items: flex-start; gap: 12px; }
+.eb-diagnostics-head > .log-toggle { min-width: 0; flex: 1 1 auto; }
+.eb-diagnostics-head > .eb-actions { min-width: 0; }
 
 /* Two-tier header (per the AEBridge Critique design doc): tier 1 is a thin
    IDENTITY bar — wordmark, one rolled-up status pill, Reset — sitting on a
@@ -1503,8 +1565,8 @@ export default {
   gap: 8px;
 }
 
-.name-affix { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.name-affix .eb-input { flex: 1; min-width: 0; }
+.eb-rename-copy { margin-top: 4px; }
+.eb-rename-preview { margin-top: -2px; }
 .shot-group { display: flex; flex-direction: column; gap: 4px; }
 .job-name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .ver-caret {
@@ -1535,4 +1597,10 @@ export default {
   transition: transform 0.12s ease;
 }
 .log-caret.is-open { transform: rotate(90deg); }
+
+@media (max-width: 600px) {
+  .eb-diagnostics-head { flex-direction: column; align-items: stretch; }
+  .eb-diagnostics-head > .log-toggle { width: 100%; flex-wrap: wrap; row-gap: 4px; }
+  .eb-diagnostics-head > .eb-actions { width: 100%; justify-content: flex-start; }
+}
 </style>

@@ -103,6 +103,7 @@ from ..paths import (
     validate_aep_save_target,
     validate_aep_selection,
 )
+from ..media import MediaProbeError, probe_video, validate_video
 
 router = APIRouter(prefix="/v1/aebridge")
 
@@ -484,35 +485,77 @@ def cancel(job_id: str) -> JobView:
 
 # --- return ----------------------------------------------------------------
 def _validate_return(job: Job, return_path: Path) -> ValidationReport:
-    """Compare the return against the sidecar. Prototype trusts the sidecar's
-    own numbers; real code probes the QuickTime."""
+    """Compare the return against the sidecar using local ffprobe metadata."""
     sc = job.sidecar
     assert sc is not None
-    # TODO: probe return_path with ffprobe; compare to sidecar.
-    return ValidationReport(rate_ok=True, resolution_ok=True, frame_count_ok=True)
+    try:
+        actual = probe_video(return_path)
+    except MediaProbeError as exc:
+        return ValidationReport(
+            rate_ok=False,
+            resolution_ok=False,
+            frame_count_ok=False,
+            detail=str(exc),
+        )
+    return validate_video(
+        actual,
+        sc.frame_rate,
+        sc.resolution.w,
+        sc.resolution.h,
+        sc.frame_count,
+    )
+
+
+def _checked_return_path(job: Job) -> Path:
+    if job.return_path is None:
+        raise HTTPException(status_code=409, detail='no return detected yet')
+    try:
+        return ensure_within(job.return_path, [settings.roots.watch_root])
+    except PathNotAllowed as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+def _store_return_validation(job: Job, return_path: Path) -> ValidationReport:
+    report = _validate_return(job, return_path)
+    job.validation = report
+    if not report.passed:
+        job.fail(f'validation failed: {report.detail}')
+        raise HTTPException(status_code=422, detail=report.detail or 'validation failed')
+    if job.state == JobState.returned:
+        job.transition(JobState.validated)
+    return report
+
+
+@router.post('/return/{job_id}/validate', response_model=JobView)
+def validate_return(job_id: str) -> JobView:
+    """Validate a completed render before the panel imports it into Avid."""
+    job = _require(job_id)
+    _store_return_validation(job, _checked_return_path(job))
+    return job.view()
+
+
+@router.post('/return/{job_id}/validate-render', response_model=ValidationReport)
+def validate_render(job_id: str, req: RenderImportedRequest) -> ValidationReport:
+    """Validate a specific render version without changing job state."""
+    job = _require(job_id)
+    try:
+        return_path = ensure_within(req.path, [settings.roots.watch_root])
+    except PathNotAllowed as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    report = _validate_return(job, return_path)
+    if not report.passed:
+        raise HTTPException(status_code=422, detail=report.detail or 'validation failed')
+    return report
 
 
 @router.post("/return/{job_id}/import", response_model=JobView)
 def import_return(job_id: str, req: ImportRequest) -> JobView:
     job = _require(job_id)
-    if job.return_path is None:
-        raise HTTPException(status_code=409, detail="no return detected yet")
-    # Returns are only accepted from inside watch_root.
-    try:
-        ensure_within(job.return_path, [settings.roots.watch_root])
-    except PathNotAllowed as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    report = _validate_return(job, job.return_path)
-    job.validation = report
-    if not report.passed:
-        job.fail(f"validation failed: {report.detail}")
-        raise HTTPException(status_code=422, detail=report.detail or "validation failed")
+    return_path = _checked_return_path(job)
+    _store_return_validation(job, return_path)
 
     bin_name = req.target_bin or _default_bin(job)
-    mcapi.import_return(str(job.return_path), bin_name)
-    if job.state == JobState.returned:
-        job.transition(JobState.validated)
+    mcapi.import_return(str(return_path), bin_name)
     return job.view()
 
 

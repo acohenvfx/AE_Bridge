@@ -35,8 +35,8 @@ Also verified: **`plateOffsets` in AE** — a stack whose tracks have different
 spans lands with the layers correctly offset (this had only been unit-tested
 until now, since every earlier test stack shared one span).
 
-What is NOT verified: auto-solo (parked — see the `DoCommand` fact), and
-`ffprobe` return validation (still stubbed).
+What is NOT verified: auto-solo (parked — see the `DoCommand` fact), and a
+real Avid/After Effects return through the new `ffprobe` guardrail.
 
 ## The grab pipeline (as-built) — `src/utils/api/timeline.js`
 
@@ -352,8 +352,8 @@ Roughly in order. **Everything below is verified in Avid**, including the
    dropdown with **Import all N**; orphaned jobs (plate deleted) offer Remove;
    **Reset** in the header clears a wedged queue.
 4. **Consumer simplification.** Jobs + Renders merged into one **Shots** list;
-   Settings and Diagnostics behind disclosures; prefix/suffix kept in the main
-   flow next to the plate names they affect.
+   Settings and Diagnostics behind disclosures; prefix/suffix live in their own
+   Renaming section in the main flow.
 5. **Look (2026-07-29).** App-name lockup, AE's periwinkle accent (hue 282) and
    a subtle indigo lift on the surfaces; the vestigial sidebar removed.
 6. **Two-tier header (2026-07-30),** from the *AEBridge Critique* design doc —
@@ -493,10 +493,9 @@ disagreed in two places here, and the markup was the better guide.
 - **Diagnostics** (collapsed, was "Log"): the MCAPI log plus Pause updates,
   Probe commands, Try auto-solo. Collapsed header still shows the build stamp
   and an error count.
-- **Prefix/suffix stay in the main flow**, on the Plate stack next to the plate
-  names they change — per-shot naming is a real editorial need, not just
-  collision avoidance, so it must not be buried in Settings. The plate rows
-  update live as you type.
+- **Prefix/suffix live in the main flow**, in a dedicated Renaming section —
+  per-shot naming is a real editorial need, not just collision avoidance, so it
+  must not be buried in Settings. The plate rows update live as you type.
 - **Not done:** folding analyze+grab into Send. Blocked by manual soloing —
   Send can only fold in grab+export, so the flow stays "solo → auto-grab →
   Send" until auto-solo is solved.
@@ -568,12 +567,14 @@ disagreed in two places here, and the markup was the better guide.
   off. Re-Analyze unions with the existing plan so this can't drop pending
   plates, but the answer is worth pinning down — if disabled tracks *are*
   reported, Analyze can be re-run freely at any point.
-- **Scratch-bin cleanup** — subclips accumulate in `AEBridge_Scratch` (no delete
-  API), now several per shot per track, so a range batch fills it fast. This is
-  the most likely next annoyance in daily use.
-- **Return-side validation (`ffprobe` rate/res/frame-count) is stubbed** — the
-  sidecar records the expected numbers but nothing checks the render against
-  them. The guardrail against silently cutting in a wrong-rate temp.
+- **Scratch-bin cleanup** — subclips accumulate in `AEBridge_Scratch` and MCAPI
+  still has no delete-mob RPC. Diagnostics now has **Select scratch**, which
+  selects all scratch subclips in one safe pass; review the count, then press
+  Delete in Avid. Automatic deletion remains intentionally unimplemented until
+  a stable, context-safe Avid command is verified.
+- **Return-side validation** now probes the completed render with local
+  `ffprobe` for rate, resolution, and frame count before the panel imports it;
+  mismatches stop the import with a useful detail string.
 - **Plan-preview UX (4c):** editable per-plate names before Send.
 - **Duplicate clips after a re-render.** Importing a re-rendered version adds a
   second clip to the bin beside the first (correct — different media), but Avid

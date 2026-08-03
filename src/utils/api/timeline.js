@@ -34,6 +34,8 @@ import {
   GetMarkersRequestBody,
   GetListOfCommandsRequest,
   GetListOfCommandsRequestBody,
+  SelectMobsInBinRequest,
+  SelectMobsInBinRequestBody,
   DoCommandRequest,
   DoCommandRequestBody,
   IsCommandsEnabledRequest,
@@ -328,6 +330,38 @@ function listBinItems(binPath, flags) {
     stream.on('error', reject)
     stream.on('end', () => resolve(items))
   })
+}
+
+// MCAPI has no delete-mob RPC. Selecting the scratch subclips in their bin
+// gives the editor a safe, one-click handoff: the user can review the count
+// and press Delete in Avid. Keep the destructive keypress in Avid's UI rather
+// than guessing which context-sensitive DoCommand entry means "delete bin
+// items" for a particular Media Composer version.
+async function listScratchSubclips(scratchBin = 'AEBridge_Scratch') {
+  await ensureBin(scratchBin)
+  const binPath = await resolveBinPath(scratchBin)
+  const F = GetListOfBinItemsRequestBody.BinItemFlags
+  const items = await listBinItems(binPath, F ? [F.SUBCLIPS] : null)
+  return { binPath, items }
+}
+
+async function selectMobsInBin(binPath, mobIds) {
+  if (!mobIds.length) return
+  const client = requireClient()
+  const req = new SelectMobsInBinRequest()
+  const body = new SelectMobsInBinRequestBody()
+  body.setBinPath(binPath)
+  body.setMobIdsList(mobIds)
+  body.setAddToSelection(false)
+  req.setBody(body)
+  await callUnary(client, 'selectMobsInBin', req, getAccessTokenMetadata())
+  logMcapiVerbose('select scratch subclips', { binPath, count: mobIds.length })
+}
+
+export async function selectScratchSubclips(scratchBin = 'AEBridge_Scratch') {
+  const { binPath, items } = await listScratchSubclips(scratchBin)
+  if (items.length) await selectMobsInBin(binPath, items.map((item) => item.mobId))
+  return { binPath, count: items.length }
 }
 
 // --- bin path resolution ---------------------------------------------------
@@ -1052,11 +1086,19 @@ export async function probeCommands() {
   // command alongside the track ones.
   const windowish = cmds.filter((c) =>
     /^Windows/i.test(c.category) || /timeline|window|focus|activate/i.test(c.name))
+  // Scratch-bin cleanup has no dedicated MCAPI delete RPC. Before attempting
+  // to drive Avid's command layer, surface only commands whose names suggest
+  // they can remove selected bin items. This is intentionally diagnostic:
+  // command names and availability vary with Avid context, so cleanup must
+  // not guess at a destructive command.
+  const cleanupish = cmds.filter((c) =>
+    /delete|remove|trash|clear/i.test(c.name + ' ' + c.category))
   logMcapiVerbose('commands: total', cmds.length)
   logMcapiVerbose('commands: categories', Array.from(new Set(cmds.map((c) => c.category))).join(', '))
   logMcapiVerbose('commands: track-related', trackish)
   logMcapiVerbose('commands: window/focus candidates', windowish)
-  return { commands: cmds, trackRelated: trackish, windowRelated: windowish }
+  logMcapiVerbose('commands: cleanup candidates', cleanupish)
+  return { commands: cmds, trackRelated: trackish, windowRelated: windowish, cleanupRelated: cleanupish }
 }
 
 // --- driving Avid commands -------------------------------------------------

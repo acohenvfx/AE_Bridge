@@ -22,7 +22,10 @@ def test_app_page_served():
         r = c.get("/app")
         assert r.status_code == 200
         assert "AEBridge" in r.text
-        assert "/v1/aebridge/send" in r.text  # UI wired to the real route
+        # Nuxt keeps application code in the referenced hashed chunks rather
+        # than inline in the HTML shell.
+        chunks = (ROOT / "dist" / "html" / "_nuxt").glob("*.js")
+        assert any("/v1/aebridge/send" in p.read_text(errors="ignore") for p in chunks)
         assert "Content-Security-Policy" in r.headers
         assert "connect-src 'self'" in r.headers["Content-Security-Policy"]
 

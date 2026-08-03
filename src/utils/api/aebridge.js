@@ -46,6 +46,9 @@ export const plateExists = (name) =>
 export const prepare = (name) => postJSON('/v1/aebridge/prepare', { name: name || null })
 export const send = (payload) => postJSON('/v1/aebridge/send', payload)
 export const swap = (jobId) => postJSON(`/v1/aebridge/return/${jobId}/swap`)
+export const validateReturn = (jobId) => postJSON(`/v1/aebridge/return/${jobId}/validate`)
+export const validateRender = (jobId, path) =>
+  postJSON(`/v1/aebridge/return/${jobId}/validate-render`, { path })
 // Panel does the MCAPI ImportFile itself; this just records state on the helper.
 export const markImported = (jobId, targetBin) =>
   postJSON(`/v1/aebridge/return/${jobId}/imported`, { target_bin: targetBin || null })
