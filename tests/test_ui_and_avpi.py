@@ -6,6 +6,9 @@ import zipfile
 from pathlib import Path
 
 os.environ["AEBRIDGE_HOME"] = tempfile.mkdtemp(prefix="aebridge_uitest_")
+# Keep the UI test hermetic. Production uses the Pages proxy; this test covers
+# the local fallback used before a Pages deployment or during development.
+os.environ["AEBRIDGE_SERVE_LOCAL_UI"] = "1"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -13,6 +16,13 @@ from service.app import app  # noqa: E402
 from service.config import settings  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_helper_uses_its_own_port():
+    from service.config import HELPER_PORT
+
+    assert HELPER_PORT == 8010
+    assert HELPER_PORT not in {8000, 8800}
 
 
 def test_app_page_served():

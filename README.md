@@ -20,15 +20,15 @@ the same proven architecture *pattern* (see
 has its own stack — its own AVPI, UI, and helper on its own port. It does **not**
 use EB's helper, EB's port, or ElementalEngine. In short:
 
-- **Panel UI (Nuxt/Vue):** controls, status, and the **MCAPI calls** (the Avid
+- **Panel UI (Nuxt/Vue, Cloudflare Worker):** controls, status, and the **MCAPI calls** (the Avid
   gateway/token are injected into the panel WebView, so timeline access runs
   client-side — read the shot, subclip from marks, rename, export).
 - **AEBridge Helper (`127.0.0.1:8010`):** owns the local side — path-safe export
   dirs, the sidecar, `.aep` templating, After Effects discovery + launch, and
   (soon) the return watch-folder + import. Runs alongside EB's `8000` helper,
   fully separate.
-- **Data stays on the Mac.** The round-trip is entirely local; no network
-  needed.
+- **Data stays on the Mac.** Cloudflare receives only the static panel bundle;
+  footage, project paths, sidecars, renders, and MCAPI data stay local.
 
 ## How the grab works (Avid → After Effects)
 
@@ -45,7 +45,8 @@ use EB's helper, EB's port, or ElementalEngine. In short:
 ## Stack
 
 Follows the Elemental Bender architecture: **Nuxt 2 / Vue 2** panel UI (Node 16,
-Yarn) + **Python FastAPI** helper, thin `.avpi`, helper-served UI in release.
+Yarn) deployed to the AEBridge Cloudflare Worker + **Python FastAPI** helper, thin `.avpi`,
+and a localhost proxy that keeps the hosted UI same-origin with the API.
 Standalone from EB — own helper port (`8010`), no ElementalEngine.
 
 ## Contents
@@ -66,9 +67,9 @@ Standalone from EB — own helper port (`8010`), no ElementalEngine.
 nvm use && yarn install
 yarn dev                     # http://127.0.0.1:3010/app  (hot reload)
 
-# Helper (separate terminal)
+# Helper (separate terminal; local UI fallback for development)
 pip install -r requirements.txt
-PYTHONPATH=. python -m service.app   # API on 127.0.0.1:8010
+AEBRIDGE_SERVE_LOCAL_UI=1 PYTHONPATH=. python -m service.app   # API on 127.0.0.1:8010
 
 # Package the panel
 yarn build:avpi:release      # -> dist/AEBridge.avpi (release: helper serves UI)
@@ -102,3 +103,6 @@ still a possible add.)
 
 See `docs/BUILD_AND_INSTALL.md` to build/run and `docs/AEBRIDGE_DESIGN.md` for
 the route contract.
+
+Cloudflare Worker setup and the production helper proxy are documented in
+`docs/CLOUDFLARE_DEPLOY.md`.

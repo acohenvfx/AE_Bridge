@@ -1,7 +1,8 @@
 // AEBridge panel — Nuxt 2 / Vue 2 SPA.
 // Dev: `yarn dev` serves on 127.0.0.1:3010; the helper API is on 8010.
 // Release: `yarn generate:release` static-exports to dist/html; the helper
-// serves it at localhost:8010/app (same-origin with the API).
+// serves the hosted Cloudflare Worker UI at localhost:8010/app (same-origin
+// with the API).
 const pkg = require('./package.json')
 
 const isRelease = process.env.AEB_RELEASE === '1'

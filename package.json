@@ -9,6 +9,7 @@
     "start": "nuxt start --port 3010 --hostname 127.0.0.1",
     "generate": "nuxt generate",
     "generate:release": "AEB_RELEASE=1 nuxt generate",
+    "build:cloudflare": "AEB_RELEASE=1 nuxt generate",
     "build:panel": "node build/panel.mjs",
     "build:avpi:release": "AEB_RELEASE=1 node build/panel.mjs",
     "build:copy": "node build/copy.mjs --run",

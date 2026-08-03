@@ -2,9 +2,10 @@
 
 AEBridge is a **Nuxt 2 / Vue 2** panel (Node 16, Yarn) plus a **Python FastAPI**
 helper, following the Elemental Bender architecture. It ships as a **thin
-`.avpi`** (manifest + icon). In release the panel UI is served by the helper at
-`http://localhost:8010/app`, same-origin with the `/v1` API — so editorial data
-never leaves localhost and the manifest URL never changes (signed once).
+`.avpi`** (manifest + icon). In release the panel UI is served through the
+helper at `http://localhost:8010/app`, same-origin with the `/v1` API. The
+helper proxies the static UI from the AEBridge Cloudflare Worker; editorial data remains
+local and the manifest URL never changes (signed once).
 
 Two independent delivery paths, same as EB: **UI** (Nuxt) and **helper** (Python).
 
@@ -89,17 +90,19 @@ yarn build:copy --run     # copy dist/AEBridge.avpi to Avid's PanelSDKPlugins
 `build/manifest.mjs` writes `dist/app/avid-manifest.json` (+ icon from
 `src/static/`); `build/zip.mjs` packages the thin `.avpi`.
 
-## Release (helper serves the UI)
+## Release (helper proxies the hosted UI)
 
 ```bash
-yarn generate:release      # static-export Nuxt to dist/html/
+yarn generate:release      # static-export Nuxt to dist/html/ (local fallback)
 pip install -r requirements.txt
-PYTHONPATH=. python -m service.app   # serves API + the built UI on 127.0.0.1:8010
+AEBRIDGE_UI_ORIGIN=https://aebridge.andrewcoheneditor.com PYTHONPATH=. python3 -m service.app
+                             # serves API + proxies the Worker UI on 127.0.0.1:8010
 ```
 
-The helper serves `dist/html` at `/app` (with a localhost-only CSP) and its
-assets at `/_nuxt/*`. If `dist/html` doesn't exist yet, it falls back to the
-lightweight `service/ui/app.html` so the panel still works.
+The helper proxies `/app` and its assets at `/_nuxt/*` from the Worker origin,
+with a localhost-only CSP. Set `AEBRIDGE_SERVE_LOCAL_UI=1` to serve `dist/html`
+locally instead; if that export is absent, the lightweight
+`service/ui/app.html` fallback still works.
 
 Open `http://localhost:8010/app` to see the panel outside Avid.
 

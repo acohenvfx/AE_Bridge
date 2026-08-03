@@ -7,12 +7,10 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from .config import DEV_ORIGINS, settings
 from .integrations import ae
 from .routers import aebridge, ui, version
-from .routers.ui import DIST_HTML
 from .watcher import watcher
 
 app = FastAPI(title="AEBridge Helper", version="0.0.1")
@@ -27,10 +25,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# API routers first so /v1, /app, /healthz always win over the static mount.
+# API routers first so /v1 routes remain local and protected from the UI proxy.
 app.include_router(version.router)
 app.include_router(aebridge.router)
-app.include_router(ui.router)
 
 
 @app.on_event("startup")
@@ -45,15 +42,15 @@ def _shutdown() -> None:
     watcher.stop()
 
 
-# Serve the generated Nuxt export (assets like /_nuxt/*, "/") if it exists.
-# Mounted LAST — lowest routing priority — per the EB secure-runtime pattern.
-if DIST_HTML.is_dir():
-    app.mount("/", StaticFiles(directory=str(DIST_HTML), html=True), name="ui")
-
-
 @app.get("/healthz")
 def healthz() -> dict:
     return {"ok": True, "ae": settings.ae_version}
+
+
+# UI catch-all LAST — API and readiness routes above always win. In production
+# this proxies the Cloudflare Worker through localhost; in development it can serve
+# dist/html locally with AEBRIDGE_SERVE_LOCAL_UI=1.
+app.include_router(ui.router)
 
 
 def main() -> None:

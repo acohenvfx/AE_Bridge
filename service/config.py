@@ -9,10 +9,16 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# AEBridge runs its OWN helper on its OWN port — deliberately NOT Elemental
-# Bender's 8000. Placeholder until confirmed free on target machines.
+# AEBridge runs its OWN helper on its OWN port — deliberately separate from
+# Elemental Bender (8000) and Difference Engine (8800).
 HELPER_HOST = os.environ.get("AEBRIDGE_HOST", "127.0.0.1")
 HELPER_PORT = int(os.environ.get("AEBRIDGE_PORT", "8010"))
+if HELPER_PORT in {8000, 8800}:
+    raise RuntimeError(
+        "AEBridge cannot use port 8000 or 8800; those ports belong to "
+        "Elemental Bender and Difference Engine. Set AEBRIDGE_PORT to a "
+        "different localhost port."
+    )
 
 HELPER_VERSION = "0.0.3"
 # Feature ids the panel checks before using a route, so a stale helper produces

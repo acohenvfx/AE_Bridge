@@ -1,24 +1,47 @@
-"""Serves the AEBridge panel UI at /app — same-origin with the /v1 API.
+"""Serve the panel UI through the local helper, same-origin with its API.
 
-Prefers the generated Nuxt static export (dist/html, from `yarn generate:release`)
-and falls back to the lightweight single-page UI so the panel still works before
-a Nuxt build exists. Static assets (/_nuxt, etc.) are mounted by app.py.
+In production the helper proxies the static panel from the AEBridge Cloudflare
+Worker. This keeps the signed AVPI pointed at ``http://localhost:8010/app`` while allowing
+panel changes to ship over the air. The helper never proxies the versioned API
+or any user media path.
 
-The panel and helper share an origin (127.0.0.1:8010), so the UI reaches the
-API with no CORS and editorial data never leaves localhost.
+Set ``AEBRIDGE_SERVE_LOCAL_UI=1`` to serve ``dist/html`` while developing or
+before the first Worker deployment. Set ``AEBRIDGE_DEV=1`` to proxy the Nuxt
+dev server instead.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
-from fastapi import APIRouter, Response
-from fastapi.responses import HTMLResponse, PlainTextResponse
+import httpx
+from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import FileResponse
 
 router = APIRouter()
 
-_ROOT = Path(__file__).resolve().parent.parent.parent  # AE_Bridge/
-DIST_HTML = _ROOT / "dist" / "html"
-_LEGACY = Path(__file__).resolve().parent.parent / "ui" / "app.html"
+_ROOT = Path(__file__).resolve().parents[2]  # AE_Bridge/
+_LOCAL_UI_ROOT = _ROOT / "dist" / "html"
+_LEGACY_UI = _ROOT / "service" / "ui" / "app.html"
+
+_default_origin = "https://aebridge.andrewcoheneditor.com"
+if os.environ.get("AEBRIDGE_DEV") == "1":
+    _default_origin = "http://127.0.0.1:3010"
+UI_ORIGIN = os.environ.get("AEBRIDGE_UI_ORIGIN", _default_origin).rstrip("/")
+
+# Reuse connections and TLS sessions across proxied asset requests.
+_http_client = httpx.AsyncClient(follow_redirects=True, timeout=20.0)
+
+_SKIP_RESPONSE_HEADERS = {
+    "content-encoding",
+    "transfer-encoding",
+    "connection",
+    "content-length",
+    "strict-transport-security",
+    "content-security-policy",
+    "content-security-policy-report-only",
+    "set-cookie",
+}
 
 _CSP = (
     "default-src 'self'; "
@@ -29,16 +52,108 @@ _CSP = (
 )
 
 
-def _nuxt_app_page() -> Path | None:
-    candidate = DIST_HTML / "app" / "index.html"
-    return candidate if candidate.is_file() else None
+def _local_ui_enabled() -> bool:
+    return os.environ.get("AEBRIDGE_SERVE_LOCAL_UI") == "1"
 
 
-@router.get("/app", response_class=HTMLResponse)
-def app_page() -> Response:
-    page = _nuxt_app_page() or (_LEGACY if _LEGACY.is_file() else None)
-    if page is None:
-        return PlainTextResponse(
-            "AEBridge UI not built. Run `yarn generate:release`.", status_code=404
+def _local_ui_file(path: str) -> Path | None:
+    """Resolve a static UI path without allowing traversal outside dist/html."""
+    rel = (path or "").lstrip("/")
+    root = _LOCAL_UI_ROOT.resolve()
+
+    candidates: list[Path] = []
+    if not rel or rel.endswith("/"):
+        candidates.extend(
+            [
+                root / rel / "index.html",
+                root / rel / "200.html",
+                root / "index.html",
+                root / "200.html",
+            ]
         )
-    return HTMLResponse(page.read_text(), headers={"Content-Security-Policy": _CSP})
+    else:
+        candidate = (root / rel).resolve()
+        if candidate.is_dir():
+            candidates.extend([candidate / "index.html", candidate / "200.html"])
+        candidates.extend([candidate, root / "200.html"])
+
+    for candidate in candidates:
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _serve_local_ui(path: str) -> FileResponse:
+    target = _local_ui_file(path)
+    if target is None and path.strip("/") in {"", "app"} and _LEGACY_UI.is_file():
+        target = _LEGACY_UI
+    if target is None:
+        raise HTTPException(status_code=404, detail="Local UI file not found")
+    media = "text/html" if target.suffix == ".html" else None
+    return FileResponse(
+        str(target),
+        media_type=media,
+        headers={"Content-Security-Policy": _CSP},
+    )
+
+
+@router.api_route(
+    "/{path:path}",
+    methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+)
+async def ui_proxy(path: str, request: Request):
+    # These namespaces belong to the local helper and must never be forwarded
+    # to a public UI host. The explicit health/docs exclusions also make this
+    # catch-all safe if FastAPI route ordering changes later.
+    if (
+        path == "v1"
+        or path.startswith("v1/")
+        or path == "api"
+        or path.startswith("api/")
+        or path in {"healthz", "openapi.json", "docs", "redoc"}
+    ):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if _local_ui_enabled():
+        return _serve_local_ui(path)
+
+    url = f"{UI_ORIGIN}/{path}"
+    try:
+        # Do not forward Host or connection-specific headers from localhost.
+        # Request identity encoding so response bytes match headers after the
+        # proxy removes upstream content-encoding metadata.
+        headers = {
+            key: value
+            for key, value in request.headers.items()
+            if key.lower() not in {"host", "content-length", "connection"}
+        }
+        headers["accept-encoding"] = "identity"
+        upstream = await _http_client.request(
+            request.method,
+            url,
+            params=dict(request.query_params),
+            content=await request.body(),
+            headers=headers,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Panel UI is hosted at {UI_ORIGIN} and could not be reached: {exc}",
+        ) from exc
+
+    headers = {
+        key: value
+        for key, value in upstream.headers.items()
+        if key.lower() not in _SKIP_RESPONSE_HEADERS
+    }
+    headers["Content-Security-Policy"] = _CSP
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=headers,
+        media_type=upstream.headers.get("content-type"),
+    )

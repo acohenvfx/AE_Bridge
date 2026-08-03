@@ -16,6 +16,7 @@ service/
   routers/
     version.py           /v1/version (feature detection)
     aebridge.py          /v1/aebridge/* route contract
+    ui.py                localhost UI proxy + local development fallback
   integrations/
     mcapi.py             Avid MCAPI seam (stubbed — returns fake shot data)
     ae.py                After Effects seam (discovery, comp build, stability)
@@ -47,6 +48,9 @@ bad picker selection.
 | Var | Default |
 | --- | --- |
 | `AEBRIDGE_PORT` | `8010` |
+| `AEBRIDGE_UI_ORIGIN` | `https://aebridge.andrewcoheneditor.com` |
+| `AEBRIDGE_SERVE_LOCAL_UI` | unset; set to `1` for a local generated UI |
+| `AEBRIDGE_DEV` | unset; set to `1` to proxy Nuxt on `127.0.0.1:3010` |
 | `AEBRIDGE_HOME` | `~/Library/Application Support/AEBridge` |
 | `AEBRIDGE_EXPORT_ROOT` / `WATCH_ROOT` / `TEMPLATE_ROOT` / `AEP_WORK_ROOT` | under `AEBRIDGE_HOME` |
 
@@ -69,3 +73,10 @@ helper the shot metadata + exported reference via `/prepare` + `/send`.
 - Watch-folder loop that flips a job `rendering → returned` on a stable file.
 - `ffprobe`-based return validation against the sidecar; `/return/*` import+swap
   against live Avid.
+
+## Cloudflare Worker
+
+The production helper keeps the signed AVPI on `http://localhost:8010/app` and
+proxies only the static panel UI from `AEBRIDGE_UI_ORIGIN`. The versioned API,
+editorial metadata, footage, and renders remain local. See
+`docs/CLOUDFLARE_DEPLOY.md` for the Worker workflow and installer environment.
