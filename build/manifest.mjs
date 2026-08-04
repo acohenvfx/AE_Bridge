@@ -23,7 +23,13 @@ if (custom) {
   url = 'http://localhost:8010/app'
   allowedDomains = ['localhost:8010', '127.0.0.1:8010']
 } else {
-  url = 'http://localhost:3010/app'
+  // Cache-bust the dev URL. Avid's WebView caches the bundle on disk and keeps
+  // serving it across panel closes AND Media Composer restarts — so after a
+  // rollback it will happily keep running the newer code. A different query
+  // string is a different cache key, which is the only reliable way to force a
+  // fresh fetch. Query params don't affect allowedDomains (host:port only).
+  const bust = process.env.AEB_CACHE_BUST || new Date().toISOString().replace(/\D/g, '').slice(0, 14)
+  url = `http://localhost:3010/app?v=${bust}`
   allowedDomains = ['localhost:3010', '127.0.0.1:3010', 'localhost:8010', '127.0.0.1:8010']
 }
 
