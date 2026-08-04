@@ -155,7 +155,7 @@ def parse_edl(req: ParseEdlRequest) -> ParseEdlResponse:
     except FileNotFoundError:
         raise HTTPException(status_code=400, detail=f"EDL not found: {path}")
     return ParseEdlResponse(clips=[
-        EdlClip(num=e.num, clip_name=e.clip_name, rec_in=e.rec_in, rec_out=e.rec_out,
+        EdlClip(num=e.num, track=e.track, clip_name=e.clip_name, rec_in=e.rec_in, rec_out=e.rec_out,
                 src_in=e.src_in, src_out=e.src_out)
         for e in events
     ])

@@ -83,6 +83,7 @@ class ParseEdlRequest(BaseModel):
 
 class EdlClip(BaseModel):
     num: str
+    track: str = ""
     clip_name: str = ""
     rec_in: str
     rec_out: str

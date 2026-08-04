@@ -470,7 +470,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-08-03.5 · auto-solo diagnostics'
+const UI_BUILD = '2026-08-03.6 · reliable multi-track EDL'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -1016,6 +1016,7 @@ export default {
       try {
         for (const { sh, i } of todo) {
           this.s.message = 'Grabbing V' + track + ' — shot ' + (i + 1) + '/' + this.s.range.shots.length + '…'
+          const targetHint = sh.stack.find((plate) => plate.track === track) || null
           // eslint-disable-next-line no-await-in-loop
           const grabbed = await tl.grabShot({
             destBinPath: this.s.destBin,
@@ -1024,6 +1025,7 @@ export default {
             baseName: track === 1 ? '' : (sh.baseName || ''),
             atTC: sh.atTC,
             atFrame: sh.atFrame,
+            targetHint,
             parseEdl: (edlPath) => api.parseEdl(edlPath).then((x) => x.clips)
           }).catch((e) => { throw new Error('shot ' + (i + 1) + ' (' + sh.atTC + '): ' + e.message) })
 
@@ -1048,11 +1050,13 @@ export default {
       this.s.grabbingTrack = track
       this.s.message = 'Grabbing V' + track + '…'
       try {
+        const targetHint = this.s.stack.find((plate) => plate.track === track) || null
         const grabbed = await tl.grabShot({
           destBinPath: this.s.destBin,
           handles: Number(this.s.handles) || 0,
           trackNumber: track,
           baseName: track === 1 ? '' : this.s.baseName,
+          targetHint,
           parseEdl: (edlPath) => api.parseEdl(edlPath).then((r) => r.clips)
         })
         if (track === 1) {
