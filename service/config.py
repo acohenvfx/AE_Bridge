@@ -51,6 +51,7 @@ class Roots:
     base: Path
     export_root: Path
     watch_root: Path
+    edl_root: Path
     template_root: Path
     aep_work_root: Path
 
@@ -63,6 +64,7 @@ class Roots:
             base=base,
             export_root=Path(os.environ.get("AEBRIDGE_EXPORT_ROOT", desktop / "plates")),
             watch_root=Path(os.environ.get("AEBRIDGE_WATCH_ROOT", desktop / "render")),
+            edl_root=Path(os.environ.get("AEBRIDGE_EDL_ROOT", desktop / "edl")),
             # template_root ships WITH the helper runtime (same for every artist).
             template_root=Path(
                 os.environ.get("AEBRIDGE_TEMPLATE_ROOT", base / "templates")
@@ -71,7 +73,7 @@ class Roots:
         )
 
     def all_roots(self) -> list[Path]:
-        return [self.export_root, self.watch_root, self.template_root, self.aep_work_root]
+        return [self.export_root, self.watch_root, self.edl_root, self.template_root, self.aep_work_root]
 
     def ensure(self) -> None:
         for r in self.all_roots():

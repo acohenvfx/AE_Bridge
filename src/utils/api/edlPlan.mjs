@@ -1,10 +1,5 @@
 // Pure EDL helpers shared by the Avid-facing timeline code and regression tests.
 
-export function preferredEdlSetting(names) {
-  const clean = (names || []).map((name) => String(name || '').trim()).filter(Boolean)
-  return clean.find((name) => /cmx\s*3600/i.test(name)) || clean[0] || ''
-}
-
 export function normalizedVideoTrack(value) {
   const label = String(value || '').toUpperCase().replace(/\s+/g, '')
   if (label === 'V') return 1

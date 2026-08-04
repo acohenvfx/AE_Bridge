@@ -16,6 +16,7 @@ _TMP = tempfile.mkdtemp(prefix="aebridge_test_")
 os.environ["AEBRIDGE_HOME"] = _TMP
 os.environ["AEBRIDGE_EXPORT_ROOT"] = str(Path(_TMP) / "plates")
 os.environ["AEBRIDGE_WATCH_ROOT"] = str(Path(_TMP) / "render")
+os.environ["AEBRIDGE_EDL_ROOT"] = str(Path(_TMP) / "edl")
 os.environ["AEBRIDGE_TEMPLATE_ROOT"] = str(Path(_TMP) / "templates")
 os.environ["AEBRIDGE_AEP_WORK_ROOT"] = str(Path(_TMP) / "aep_work")
 

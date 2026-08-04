@@ -3,7 +3,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import time
 
-from service.edl_recovery import find_recent_edl
+from service import edl_recovery
+from service.edl_recovery import archive_generated_edl, find_recent_edl
 
 
 def test_finds_only_the_fresh_matching_sequence_edl():
@@ -21,6 +22,26 @@ def test_finds_only_the_fresh_matching_sequence_edl():
         assert find_recent_edl("MISSING", since_ms, [root]) is None
 
 
+def test_archives_only_avid_generated_edls():
+    with TemporaryDirectory() as raw:
+        base = Path(raw)
+        avid_root = base / "Avid Users"
+        destination = base / "Desktop" / "AEBridge" / "edl"
+        avid_root.mkdir()
+        generated = avid_root / "SEQUENCE.edl"
+        generated.write_text("TITLE: SEQUENCE\n", encoding="utf-8")
+        previous = edl_recovery.AVID_GENERATED_EDL_ROOT
+        edl_recovery.AVID_GENERATED_EDL_ROOT = avid_root
+        try:
+            archived = archive_generated_edl(generated, destination)
+        finally:
+            edl_recovery.AVID_GENERATED_EDL_ROOT = previous
+        assert archived.parent == destination.resolve()
+        assert archived.read_text(encoding="utf-8") == "TITLE: SEQUENCE\n"
+        assert not generated.exists()
+
+
 if __name__ == "__main__":
     test_finds_only_the_fresh_matching_sequence_edl()
+    test_archives_only_avid_generated_edls()
     print("EDL RECOVERY TESTS PASSED")

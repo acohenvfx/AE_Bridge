@@ -48,7 +48,10 @@ bad picker selection.
 | --- | --- |
 | `AEBRIDGE_PORT` | `8010` |
 | `AEBRIDGE_HOME` | `~/Library/Application Support/AEBridge` |
-| `AEBRIDGE_EXPORT_ROOT` / `WATCH_ROOT` / `TEMPLATE_ROOT` / `AEP_WORK_ROOT` | under `AEBRIDGE_HOME` |
+| `AEBRIDGE_EXPORT_ROOT` | `~/Desktop/AEBridge/plates` |
+| `AEBRIDGE_WATCH_ROOT` | `~/Desktop/AEBridge/render` |
+| `AEBRIDGE_EDL_ROOT` | `~/Desktop/AEBridge/edl` |
+| `AEBRIDGE_TEMPLATE_ROOT` / `AEP_WORK_ROOT` | under `AEBRIDGE_HOME` |
 
 ## Real on macOS now
 

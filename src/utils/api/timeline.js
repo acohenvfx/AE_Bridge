@@ -30,8 +30,6 @@ import {
   ExportFileRequestBody,
   GetListOfExportSettingsRequest,
   GetListOfExportSettingsRequestBody,
-  GetListOfExportEDLSettingsRequest,
-  GetListOfExportEDLSettingsRequestBody,
   GetMarkersRequest,
   GetMarkersRequestBody,
   GetListOfCommandsRequest,
@@ -58,7 +56,6 @@ import {
 import {
   clipsForTrack,
   hasNumberedUpperTracks,
-  preferredEdlSetting,
 } from '~/utils/api/edlPlan.mjs'
 import { recoverEdl } from '~/utils/api/aebridge.js'
 
@@ -475,35 +472,14 @@ export function enabledVideoTracks(tracks) {
     .sort((a, b) => a.number - b.number)
 }
 
-let edlSettingsPromise = null
-
-async function getEdlSettingNames() {
-  if (!edlSettingsPromise) {
-    edlSettingsPromise = (async () => {
-      const client = requireClient()
-      const req = new GetListOfExportEDLSettingsRequest()
-      req.setBody(new GetListOfExportEDLSettingsRequestBody())
-      const res = await callUnary(client, 'getListOfExportEDLSettings', req, getAccessTokenMetadata())
-      const body = res && res.getBody ? res.getBody() : null
-      const names = body && body.getSettingNamesList
-        ? body.getSettingNamesList().map((name) => String(name || '').trim()).filter(Boolean)
-        : []
-      if (!names.length) throw new Error('Media Composer returned no EDL List Tool settings')
-      logMcapiVerbose('EDL settings', names)
-      return names
-    })().catch((error) => {
-      edlSettingsPromise = null
-      throw error
-    })
-  }
-  return edlSettingsPromise
-}
-
-function makeExportEdlRequest(mobId, track, settingName) {
+function makeExportEdlRequest(mobId, track) {
   const req = new ExportEDLRequest()
   const body = new ExportEDLRequestBody()
   body.setMobId(mobId)
-  body.setEdlSettingsName(settingName)
+  // Deliberately leave edl_settings_name empty. Per MCAPI this uses Media
+  // Composer's default EDL setting. Choosing the first List Tool setting is
+  // unsafe: on this workstation it is "Default Change List", whose legacy
+  // filename increment reached 1000 and made ExportEDL report ErrorType 1000.
   if (track) {
     const tl = new TrackList()
     const lbl = new TrackLabel()
@@ -531,11 +507,9 @@ function edlFileSaveFailure(error) {
 
 async function requestEdlPath(mobId, track, sequenceName = '') {
   const client = requireClient()
-  const names = await getEdlSettingNames()
-  const settingName = preferredEdlSetting(names)
-  const req = makeExportEdlRequest(mobId, track, settingName)
+  const req = makeExportEdlRequest(mobId, track)
   logMcapiVerbose('exportEDL request', {
-    setting: settingName,
+    setting: 'Media Composer default EDL setting',
     track: track ? 'V' + track.number : 'all',
   })
   let res

@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import re
+import shutil
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
 
+AVID_GENERATED_EDL_ROOT = Path("/Users/Shared/AvidMediaComposer/Avid Users")
+
 DEFAULT_EDL_ROOTS = (
-    Path("/Users/Shared/AvidMediaComposer/Avid Users"),
+    AVID_GENERATED_EDL_ROOT,
     Path.home() / "Desktop",
 )
 
@@ -60,3 +65,20 @@ def find_recent_edl(
         except OSError:
             continue
     return max(candidates, default=(0, None), key=lambda item: item[0])[1]
+
+
+def archive_generated_edl(source: Path, destination_root: Path) -> Path:
+    """Move Avid's transient EDL into AEBridge's dedicated workspace.
+
+    Only files directly inside Avid's generated-EDL directory are moved. A
+    path from any other location is returned untouched so a user's manual EDL
+    can never be relocated as a side effect of parsing.
+    """
+    source = source.expanduser().resolve()
+    if source.parent != AVID_GENERATED_EDL_ROOT.resolve():
+        return source
+    destination_root.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    destination = destination_root / f"{source.stem}_{stamp}_{time.time_ns() % 1_000_000_000:09d}.edl"
+    shutil.move(str(source), str(destination))
+    return destination.resolve()

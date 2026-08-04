@@ -99,7 +99,7 @@ from ..models import (
     ValidationReport,
 )
 from .. import edl as edl_parser
-from ..edl_recovery import find_recent_edl
+from ..edl_recovery import archive_generated_edl, find_recent_edl
 from ..paths import (
     PathNotAllowed,
     ensure_within,
@@ -154,6 +154,7 @@ def parse_edl(req: ParseEdlRequest) -> ParseEdlResponse:
     record in/out — used to enumerate the V1 clips in the marked range."""
     path = Path(req.edl_path).expanduser()
     try:
+        path = archive_generated_edl(path, settings.roots.edl_root)
         events = edl_parser.read_and_parse(path, req.rec_in, req.rec_out, req.fps)
     except FileNotFoundError:
         raise HTTPException(status_code=400, detail=f"EDL not found: {path}")
@@ -176,6 +177,7 @@ def recover_edl(req: RecoverEdlRequest) -> RecoverEdlResponse:
     while True:
         path = find_recent_edl(req.sequence_name, req.since_ms)
         if path is not None:
+            path = archive_generated_edl(path, settings.roots.edl_root)
             stat = path.stat()
             return RecoverEdlResponse(
                 edl_path=str(path),
