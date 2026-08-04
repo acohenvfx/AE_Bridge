@@ -15,7 +15,8 @@
     "lint": "eslint --ext .js,.mjs,.vue --ignore-path .gitignore .",
     "format": "prettier --write .",
     "check:tpl": "node tools/check-vue-template.js src/components/AEBridgePanel.vue",
-    "test:edl": "node tests/test_edl_plan.mjs"
+    "test:edl": "node tests/test_edl_plan.mjs",
+    "test:offsets": "node tests/test_plate_offsets.mjs"
   },
   "dependencies": {
     "google-protobuf": "^3.21.4",

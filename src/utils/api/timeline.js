@@ -1146,24 +1146,7 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trac
   }
 }
 
-// AE layer alignment across a collected stack. Comp time 0 = the start of the
-// BASE plate's file (its rec_in minus its head handles); every other plate's
-// file starts at its own rec_in minus its own head handles, so the layer offset
-// is the difference. Plates are ordered bottom (lowest track) first.
-// Pure function — unit-testable without Avid.
-export function plateOffsets(plates, fps = 24) {
-  const sorted = (plates || []).slice().sort((a, b) => a.track - b.track)
-  if (!sorted.length) return []
-  const base = sorted[0]
-  const baseStart = tcToFrames(base.rec_in || '', fps) - (base.head_handles || 0)
-  return sorted.map((p, i) => ({
-    ...p,
-    order: i + 1,
-    offset_frames: p.rec_in
-      ? (tcToFrames(p.rec_in, fps) - (p.head_handles || 0)) - baseStart
-      : 0,
-  }))
-}
+export { plateOffsets } from '~/utils/api/plateOffsets.mjs'
 
 // --- command probe ---------------------------------------------------------
 // Enumerate the Avid commands this panel is allowed to drive.

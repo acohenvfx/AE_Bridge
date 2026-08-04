@@ -1321,7 +1321,7 @@ export default {
       const shot = { ...shotMeta }
       const named = (this.s.prefix || '') + shot.shot_name + (this.s.suffix || '')
       shot.shot_name = named
-      const plates = tl.plateOffsets(grabbedPlates, Math.round(parseFloat(shot.frame_rate) || 24))
+      const plates = tl.plateOffsets(grabbedPlates)
         .map((p) => ({ ...p, name: (this.s.prefix || '') + p.name + (this.s.suffix || '') }))
       logMcapiVerbose('sending plates (final names)', {
         shot: named,
