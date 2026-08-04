@@ -12,6 +12,7 @@ dev server instead.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -45,7 +46,8 @@ _SKIP_RESPONSE_HEADERS = {
 
 _CSP = (
     "default-src 'self'; "
-    "connect-src 'self' http://127.0.0.1:8010 http://localhost:8010; "
+    "connect-src 'self' http://127.0.0.1:8010 http://localhost:8010 "
+    "http://127.0.0.1:4930 http://localhost:4930; "
     "img-src 'self' data:; font-src 'self' https://fonts.gstatic.com; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
     "script-src 'self' 'unsafe-inline'"
@@ -132,10 +134,16 @@ async def ui_proxy(path: str, request: Request):
             if key.lower() not in {"host", "content-length", "connection"}
         }
         headers["accept-encoding"] = "identity"
+        params = dict(request.query_params)
+        if path in {"app", "app/"}:
+            # The HTML shell changes whenever a deployment changes hashed
+            # asset names. Keep the local AVPI from reusing an older edge copy.
+            params["_aebridge"] = str(int(time.time()))
+
         upstream = await _http_client.request(
             request.method,
             url,
-            params=dict(request.query_params),
+            params=params,
             content=await request.body(),
             headers=headers,
         )

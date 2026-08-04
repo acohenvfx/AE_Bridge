@@ -13,7 +13,7 @@
 
 var jspb = require('google-protobuf');
 var goog = jspb;
-var global = Function('return this')();
+var global = typeof globalThis !== 'undefined' ? globalThis : window;
 
 var MCAPI_Types_pb = require('./MCAPI_Types_pb.js');
 goog.object.extend(proto, MCAPI_Types_pb);

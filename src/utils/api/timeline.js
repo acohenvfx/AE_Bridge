@@ -239,8 +239,7 @@ export async function analyzeRange({ parseEdl }) {
   const edls = {}
   for (const t of vids) {
     try {
-      const p = await exportEdlForTrack(shot.mobId, t)
-      edls[t.number] = (p && parseEdl) ? await parseEdl(p) : []
+      edls[t.number] = await parseTrackEdl({ mobId: shot.mobId, track: t, parseEdl })
     } catch (e) {
       logMcapiVerbose('range: V' + t.number + ' EDL failed', e.message)
       edls[t.number] = []
@@ -472,27 +471,64 @@ export function enabledVideoTracks(tracks) {
     .sort((a, b) => a.number - b.number)
 }
 
-// Run ExportEDL for one track; returns the EDL file path MC wrote.
-export async function exportEdlForTrack(mobId, track) {
-  const client = requireClient()
+function makeExportEdlRequest(mobId, track) {
   const req = new ExportEDLRequest()
   const body = new ExportEDLRequestBody()
   body.setMobId(mobId)
-  const tl = new TrackList()
-  const lbl = new TrackLabel()
-  lbl.setType(track.type)
-  lbl.setNumber(track.number)
-  tl.setTrackLabelsList([lbl])
-  body.setTrackList(tl)
+  if (track) {
+    const tl = new TrackList()
+    const lbl = new TrackLabel()
+    lbl.setType(track.type)
+    lbl.setNumber(track.number)
+    tl.setTrackLabelsList([lbl])
+    body.setTrackList(tl)
+  }
   req.setBody(body)
+  return req
+}
+
+async function requestEdlPath(mobId, track) {
+  const client = requireClient()
+  const req = makeExportEdlRequest(mobId, track)
   const res = await callUnary(client, 'exportEDL', req, getAccessTokenMetadata(), 120000)
   const b = res && res.getBody ? res.getBody() : null
-  const path = b && b.getPath ? String(b.getPath() || '').trim() : ''
+  return b && b.getPath ? String(b.getPath() || '').trim() : ''
+}
+
+// Run ExportEDL for one track; returns the EDL file path MC wrote.
+export async function exportEdlForTrack(mobId, track) {
+  const path = await requestEdlPath(mobId, track)
   // Log the path per track: if MC reuses ONE path for every track, a read can
   // race/return the previous track's EDL — which would silently break any
   // per-track reasoning built on it.
   logMcapiVerbose('exportEDL path V' + track.number, path)
   return path
+}
+
+// Some Media Composer versions reject a TrackList containing a higher video
+// track even though that track is present in the sequence. Retry one complete
+// EDL, then keep only the requested V-track's events. This preserves real V4+
+// plates while allowing filler-only tracks to remain absent from the stack.
+async function parseTrackEdl({ mobId, track, parseEdl }) {
+  if (!parseEdl) return []
+
+  try {
+    const path = await exportEdlForTrack(mobId, track)
+    return path ? await parseEdl(path) : []
+  } catch (directError) {
+    logMcapiVerbose('exportEDL V' + track.number + ' rejected — retrying all tracks', directError.message)
+    const path = await requestEdlPath(mobId, null)
+    if (!path) throw directError
+
+    const target = 'V' + track.number
+    const allClips = await parseEdl(path)
+    const clips = allClips.filter((clip) => String(clip.track || '').toUpperCase() === target)
+    logMcapiVerbose('all-track EDL fallback V' + track.number, {
+      totalClips: allClips.length,
+      matchingClips: clips.length,
+    })
+    return clips
+  }
 }
 
 // From parsed EDL clips, find the one whose record span contains the playhead.
@@ -624,8 +660,7 @@ async function chooseTrackAndTarget({ sequenceMobId, atTC, parseEdl, trackNumber
   logMcapiVerbose('chosen track', { chosen: track })
   const fps = 24
 
-  const edlPath = await exportEdlForTrack(sequenceMobId, track)
-  const clips = (edlPath && parseEdl) ? await parseEdl(edlPath) : []
+  const clips = await parseTrackEdl({ mobId: sequenceMobId, track, parseEdl })
   logMcapiVerbose(label + ' EDL clips', { count: clips.length, numSegments: track.numSegments, clips: clips.map((c) => ({ n: c.clip_name, in: c.rec_in, out: c.rec_out })) })
   const target = findClipAtPlayhead(clips, atTC, fps)
   if (!target) {
@@ -650,8 +685,7 @@ export async function analyzeStack({ parseEdl }) {
   const stack = []
   for (const t of vids) {
     try {
-      const p = await exportEdlForTrack(shot.mobId, t)
-      const clips = (p && parseEdl) ? await parseEdl(p) : []
+      const clips = await parseTrackEdl({ mobId: shot.mobId, track: t, parseEdl })
       const c = findClipAtPlayhead(clips, shot.playheadTC, fps)
       logMcapiVerbose('stack scan V' + t.number, c
         ? { clip: c.clip_name, span: c.rec_in + ' → ' + c.rec_out, enabled: t.enabled }
@@ -694,8 +728,7 @@ async function grabSourceHandledMob({ sequenceMobId, atTC, atFrame, parseEdl, de
     if (t.type !== TRACKTYPE_PICTURE || t.number === track.number) continue
     if (!t.enabled || !t.numSegments) continue
     try {
-      const p = await exportEdlForTrack(sequenceMobId, t)
-      const cl = (p && parseEdl) ? await parseEdl(p) : []
+      const cl = await parseTrackEdl({ mobId: sequenceMobId, track: t, parseEdl })
       const c = findClipAtPlayhead(cl, atTC, fps)
       // numSegments tells us how many clips this track really has. If the EDL
       // came back with a wildly different count, ExportEDL did NOT isolate the

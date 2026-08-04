@@ -24,7 +24,7 @@ export default {
     headers.set("Referrer-Policy", "no-referrer")
     headers.set(
       "Content-Security-Policy",
-      "default-src 'self'; connect-src 'self' http://127.0.0.1:8010 http://localhost:8010; img-src 'self' data:; font-src 'self' https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline'"
+      "default-src 'self'; connect-src 'self' http://127.0.0.1:8010 http://localhost:8010 http://127.0.0.1:4930 http://localhost:4930; img-src 'self' data:; font-src 'self' https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline'"
     )
     return new Response(asset.body, {
       status: asset.status,

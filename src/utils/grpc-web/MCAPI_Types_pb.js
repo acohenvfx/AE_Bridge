@@ -13,7 +13,7 @@
 
 var jspb = require('google-protobuf');
 var goog = jspb;
-var global = Function('return this')();
+var global = typeof globalThis !== 'undefined' ? globalThis : window;
 
 goog.exportSymbol('proto.mcapi.AddMarkerRequest', null, global);
 goog.exportSymbol('proto.mcapi.AddMarkerRequestBody', null, global);
