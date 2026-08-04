@@ -25,7 +25,10 @@ _CSP = (
     "connect-src 'self' http://127.0.0.1:8010 http://localhost:8010; "
     "img-src 'self' data:; font-src 'self' https://fonts.gstatic.com; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "script-src 'self' 'unsafe-inline'"
+    # The pre-Cloudflare Nuxt 2 release bundle contains runtime Function()
+    # calls. This CSP is only served from the localhost helper, so retain the
+    # compatibility permission needed by that original local build.
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
 )
 
 
