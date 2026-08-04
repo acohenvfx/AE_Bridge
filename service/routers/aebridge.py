@@ -89,6 +89,8 @@ from ..models import (
     PrepareRequest,
     PrepareResponse,
     ProjectMode,
+    RecoverEdlRequest,
+    RecoverEdlResponse,
     RenderFile,
     RenderImportedRequest,
     SendRequest,
@@ -97,6 +99,7 @@ from ..models import (
     ValidationReport,
 )
 from .. import edl as edl_parser
+from ..edl_recovery import find_recent_edl
 from ..paths import (
     PathNotAllowed,
     ensure_within,
@@ -159,6 +162,29 @@ def parse_edl(req: ParseEdlRequest) -> ParseEdlResponse:
                 src_in=e.src_in, src_out=e.src_out)
         for e in events
     ])
+
+
+@router.post("/recover-edl", response_model=RecoverEdlResponse)
+def recover_edl(req: RecoverEdlRequest) -> RecoverEdlResponse:
+    """Find an EDL Avid wrote even though ExportEDL returned error 1000.
+
+    Avid can successfully overwrite the sequence EDL, then promote its
+    three-digit filename-counter warning to an RPC error and omit the path.
+    Only helper-owned roots are searched; the panel cannot supply a directory.
+    """
+    deadline = time.monotonic() + (req.wait_ms / 1000)
+    while True:
+        path = find_recent_edl(req.sequence_name, req.since_ms)
+        if path is not None:
+            stat = path.stat()
+            return RecoverEdlResponse(
+                edl_path=str(path),
+                modified_ms=stat.st_mtime_ns // 1_000_000,
+            )
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.1)
+    raise HTTPException(status_code=404, detail="Avid reported error 1000 and no newly written matching EDL was found")
 
 
 # --- project picker --------------------------------------------------------

@@ -95,6 +95,17 @@ class ParseEdlResponse(BaseModel):
     clips: list[EdlClip]
 
 
+class RecoverEdlRequest(BaseModel):
+    sequence_name: str = ""
+    since_ms: int = Field(..., ge=0)
+    wait_ms: int = Field(2000, ge=0, le=5000)
+
+
+class RecoverEdlResponse(BaseModel):
+    edl_path: str
+    modified_ms: int
+
+
 class PrepareResponse(BaseModel):
     job_id: str
     export_dir: str

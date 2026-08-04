@@ -41,6 +41,16 @@ export const parseEdl = (edlPath, recIn, recOut, fps) =>
     fps: fps || 24
   })
 
+// Avid sometimes writes the EDL but returns ErrorType 1000 because its legacy
+// three-digit filename counter overflowed. The helper safely finds that exact
+// freshly written sequence EDL without accepting an arbitrary search path.
+export const recoverEdl = (sequenceName, sinceMs) =>
+  postJSON('/v1/aebridge/recover-edl', {
+    sequence_name: sequenceName || '',
+    since_ms: sinceMs,
+    wait_ms: 2000
+  })
+
 export const plateExists = (name) =>
   getJSON('/v1/aebridge/plate-exists?name=' + encodeURIComponent(name || ''))
 export const prepare = (name) => postJSON('/v1/aebridge/prepare', { name: name || null })

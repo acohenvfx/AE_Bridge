@@ -60,6 +60,7 @@ import {
   hasNumberedUpperTracks,
   preferredEdlSetting,
 } from '~/utils/api/edlPlan.mjs'
+import { recoverEdl } from '~/utils/api/aebridge.js'
 
 const TRACKTYPE_PICTURE = 0 // TrackType.TRACKTYPE_PICTURE (video)
 import {
@@ -245,7 +246,7 @@ export async function analyzeRange({ parseEdl }) {
   // One all-track EDL is split locally and reused for every shot. If Avid's
   // selected List Tool format omits track labels, loadTrackEdls falls back to
   // paced per-track requests. A failed track is never silently dropped.
-  const edls = await loadTrackEdls({ mobId: shot.mobId, tracks: vids, parseEdl })
+  const edls = await loadTrackEdls({ mobId: shot.mobId, sequenceName: shot.name, tracks: vids, parseEdl })
 
   // A V1 clip is in range if it OVERLAPS [markIn, markOut) — a range that
   // starts mid-clip still means the editor wants that shot.
@@ -528,7 +529,7 @@ function edlFileSaveFailure(error) {
   )
 }
 
-async function requestEdlPath(mobId, track) {
+async function requestEdlPath(mobId, track, sequenceName = '') {
   const client = requireClient()
   const names = await getEdlSettingNames()
   const settingName = preferredEdlSetting(names)
@@ -538,10 +539,26 @@ async function requestEdlPath(mobId, track) {
     track: track ? 'V' + track.number : 'all',
   })
   let res
+  const startedAt = Date.now()
   try {
     res = await callUnary(client, 'exportEDL', req, getAccessTokenMetadata(), 120000)
   } catch (error) {
-    if (isEdlFileSaveFailure(error)) throw edlFileSaveFailure(error)
+    if (isEdlFileSaveFailure(error)) {
+      try {
+        const recovered = await recoverEdl(sequenceName, startedAt)
+        if (recovered && recovered.edl_path) {
+          logMcapiVerbose('exportEDL recovered after Avid error 1000', {
+            track: track ? 'V' + track.number : 'all',
+            path: recovered.edl_path,
+            modifiedMs: recovered.modified_ms,
+          })
+          return recovered.edl_path
+        }
+      } catch (recoveryError) {
+        logMcapiVerbose('exportEDL recovery found no fresh matching file', recoveryError.message)
+      }
+      throw edlFileSaveFailure(error)
+    }
     throw error
   }
   const b = res && res.getBody ? res.getBody() : null
@@ -555,21 +572,21 @@ async function requestEdlPath(mobId, track) {
 
 // Run ExportEDL for one track; retained as a bounded fallback when a facility's
 // all-track EDL format does not preserve V2/V3/etc. labels.
-export async function exportEdlForTrack(mobId, track) {
-  return requestEdlPath(mobId, track)
+export async function exportEdlForTrack(mobId, track, sequenceName = '') {
+  return requestEdlPath(mobId, track, sequenceName)
 }
 
-async function parseTrackEdl({ mobId, track, parseEdl }) {
+async function parseTrackEdl({ mobId, sequenceName, track, parseEdl }) {
   if (!parseEdl) return []
-  const path = await requestEdlPath(mobId, track)
+  const path = await requestEdlPath(mobId, track, sequenceName)
   return parseEdl(path)
 }
 
-async function loadTrackEdls({ mobId, tracks, parseEdl }) {
+async function loadTrackEdls({ mobId, sequenceName, tracks, parseEdl }) {
   if (!parseEdl) return {}
   let allClips = null
   try {
-    const path = await requestEdlPath(mobId, null)
+    const path = await requestEdlPath(mobId, null, sequenceName)
     allClips = await parseEdl(path)
     logMcapiVerbose('all-track EDL parsed', { clips: allClips.length })
   } catch (error) {
@@ -593,7 +610,7 @@ async function loadTrackEdls({ mobId, tracks, parseEdl }) {
   for (let i = 0; i < tracks.length; i += 1) {
     const track = tracks[i]
     if (i) await new Promise((resolve) => setTimeout(resolve, 350))
-    byTrack[track.number] = await parseTrackEdl({ mobId, track, parseEdl })
+    byTrack[track.number] = await parseTrackEdl({ mobId, sequenceName, track, parseEdl })
   }
   return byTrack
 }
@@ -716,7 +733,7 @@ async function extendWithHandles({ mobId, binPath, handles }) {
 // supplies a targetHint so grabs reuse that result instead of exporting another
 // temporary EDL. A direct grab retains one per-track EDL as a fallback.
 // Returns { track, target, fps, allTracks }.
-async function chooseTrackAndTarget({ sequenceMobId, atTC, parseEdl, trackNumber = 1, targetHint = null }) {
+async function chooseTrackAndTarget({ sequenceMobId, sequenceName = '', atTC, parseEdl, trackNumber = 1, targetHint = null }) {
   const allTracks = await getMobTrackInfo(sequenceMobId)
   logMcapiVerbose('track info', allTracks)
   const label = 'V' + trackNumber
@@ -739,7 +756,7 @@ async function chooseTrackAndTarget({ sequenceMobId, atTC, parseEdl, trackNumber
     if (!target.rec_in || !target.rec_out) target = null
   }
   if (!target) {
-    const clips = await parseTrackEdl({ mobId: sequenceMobId, track, parseEdl })
+    const clips = await parseTrackEdl({ mobId: sequenceMobId, sequenceName, track, parseEdl })
     logMcapiVerbose(label + ' EDL clips', { count: clips.length, numSegments: track.numSegments, clips: clips.map((c) => ({ n: c.clip_name, in: c.rec_in, out: c.rec_out })) })
     target = findClipAtPlayhead(clips, atTC, fps)
   } else {
@@ -764,7 +781,7 @@ export async function analyzeStack({ parseEdl }) {
   const vids = allTracks
     .filter((t) => t.type === TRACKTYPE_PICTURE && t.numSegments > 0)
     .sort((a, b) => a.number - b.number)
-  const edls = await loadTrackEdls({ mobId: shot.mobId, tracks: vids, parseEdl })
+  const edls = await loadTrackEdls({ mobId: shot.mobId, sequenceName: shot.name, tracks: vids, parseEdl })
   const stack = []
   for (const t of vids) {
     const clips = edls[t.number] || []
@@ -788,12 +805,12 @@ export async function analyzeStack({ parseEdl }) {
   return { shot, stack }
 }
 
-async function grabSourceHandledMob({ sequenceMobId, atTC, atFrame, parseEdl, destBinPath, handles, trackNumber = 1, targetHint = null, scratchBin = 'AEBridge_Scratch' }) {
+async function grabSourceHandledMob({ sequenceMobId, sequenceName = '', atTC, atFrame, parseEdl, destBinPath, handles, trackNumber = 1, targetHint = null, scratchBin = 'AEBridge_Scratch' }) {
   await ensureBin(destBinPath)
   const destPath = await resolveBinPath(destBinPath)
   await ensureBin(scratchBin)
   const scratchPath = await resolveBinPath(scratchBin)
-  const { track, target, fps, allTracks } = await chooseTrackAndTarget({ sequenceMobId, atTC, parseEdl, trackNumber, targetHint })
+  const { track, target, fps, allTracks } = await chooseTrackAndTarget({ sequenceMobId, sequenceName, atTC, parseEdl, trackNumber, targetHint })
   const wantTrack = 'V' + track.number
 
   // ISOLATION GUARD. CreateSubClip does NOT fan one subclip per enabled track
@@ -1034,7 +1051,7 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trac
   const frame = Number.isInteger(atFrame) ? atFrame : shot.playheadFrame
   // Grab the clip under the playhead from its SOURCE master (handles from the
   // source's own media, never the sequence timeline).
-  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, atTC: tc, atFrame: frame, parseEdl, destBinPath, handles, trackNumber, targetHint })
+  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, sequenceName: shot.name, atTC: tc, atFrame: frame, parseEdl, destBinPath, handles, trackNumber, targetHint })
   const sequence = r.exportMob
   const created = r.created
 
