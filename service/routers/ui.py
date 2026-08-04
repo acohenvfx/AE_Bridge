@@ -29,6 +29,10 @@ _default_origin = "https://aebridge.andrewcoheneditor.com"
 if os.environ.get("AEBRIDGE_DEV") == "1":
     _default_origin = "http://127.0.0.1:3010"
 UI_ORIGIN = os.environ.get("AEBRIDGE_UI_ORIGIN", _default_origin).rstrip("/")
+# Keep one stable cache-buster for all versioned assets during a helper
+# session. A new helper process gets a new key, so a freshly deployed Worker
+# cannot be hidden behind an older cached HTML fallback at the edge.
+_UI_CACHE_KEY = os.environ.get("AEBRIDGE_UI_CACHE_KEY", str(int(time.time())))
 
 # Reuse connections and TLS sessions across proxied asset requests.
 _http_client = httpx.AsyncClient(follow_redirects=True, timeout=20.0)
@@ -77,7 +81,12 @@ def _local_ui_file(path: str) -> Path | None:
         candidate = (root / rel).resolve()
         if candidate.is_dir():
             candidates.extend([candidate / "index.html", candidate / "200.html"])
-        candidates.extend([candidate, root / "200.html"])
+        candidates.append(candidate)
+        # Only the known application routes may use the SPA shell fallback.
+        # Missing /_nuxt assets must remain missing instead of being returned
+        # as text/html, which Chromium rejects as a ChunkLoadError.
+        if rel.strip("/") in {"", "app"}:
+            candidates.append(root / "200.html")
 
     for candidate in candidates:
         try:
@@ -138,7 +147,11 @@ async def ui_proxy(path: str, request: Request):
         if path in {"app", "app/"}:
             # The HTML shell changes whenever a deployment changes hashed
             # asset names. Keep the local AVPI from reusing an older edge copy.
-            params["_aebridge"] = str(int(time.time()))
+            params["_aebridge"] = _UI_CACHE_KEY
+        elif path.startswith("_nuxt/"):
+            # Cloudflare's SPA fallback can otherwise be cached for a newly
+            # deployed chunk and come back as HTML with a 200 status.
+            params["_aebridge"] = _UI_CACHE_KEY
 
         upstream = await _http_client.request(
             request.method,

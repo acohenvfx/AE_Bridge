@@ -30,6 +30,8 @@ import {
   ExportFileRequestBody,
   GetListOfExportSettingsRequest,
   GetListOfExportSettingsRequestBody,
+  GetListOfExportEDLSettingsRequest,
+  GetListOfExportEDLSettingsRequestBody,
   GetMarkersRequest,
   GetMarkersRequestBody,
   GetListOfCommandsRequest,
@@ -235,11 +237,22 @@ export async function analyzeRange({ parseEdl }) {
   const v1 = vids.find((t) => t.number === 1)
   if (!v1) throw new Error('No V1 with content on this sequence')
 
-  // Per-track EDLs once, then reuse for every shot in the range.
+  // Export one complete EDL, then filter it locally for every video track.
+  // This avoids making Avid allocate a new ExportEDL### file for every track.
+  let allEdl = null
+  try {
+    allEdl = await parseAllTrackEdl({ mobId: shot.mobId, parseEdl })
+    logMcapiVerbose('range all-track EDL', { clips: allEdl.length })
+  } catch (e) {
+    if (isEdlFileSaveFailure(e)) throw edlFileSaveFailure(e)
+    logMcapiVerbose('range all-track EDL failed — using per-track fallback', e.message)
+  }
   const edls = {}
   for (const t of vids) {
     try {
-      edls[t.number] = await parseTrackEdl({ mobId: shot.mobId, track: t, parseEdl })
+      edls[t.number] = allEdl
+        ? clipsForTrack(allEdl, t)
+        : await parseTrackEdl({ mobId: shot.mobId, track: t, parseEdl })
     } catch (e) {
       logMcapiVerbose('range: V' + t.number + ' EDL failed', e.message)
       edls[t.number] = []
@@ -471,10 +484,41 @@ export function enabledVideoTracks(tracks) {
     .sort((a, b) => a.number - b.number)
 }
 
-function makeExportEdlRequest(mobId, track) {
+let edlSettingsPromise = null
+
+async function getEdlSettingNames() {
+  if (!edlSettingsPromise) {
+    edlSettingsPromise = (async () => {
+      const client = requireClient()
+      const req = new GetListOfExportEDLSettingsRequest()
+      req.setBody(new GetListOfExportEDLSettingsRequestBody())
+      const res = await callUnary(client, 'getListOfExportEDLSettings', req, getAccessTokenMetadata())
+      const body = res && res.getBody ? res.getBody() : null
+      const names = body && body.getSettingNamesList ? body.getSettingNamesList().map((name) => String(name || '').trim()).filter(Boolean) : []
+      if (!names.length) {
+        throw new Error('Media Composer returned no available EDL List Tool settings')
+      }
+      logMcapiVerbose('EDL settings', names)
+      return names
+    })().catch((error) => {
+      edlSettingsPromise = null
+      throw error
+    })
+  }
+  return edlSettingsPromise
+}
+
+function preferredEdlSetting(names) {
+  // CMX 3600 is the most portable format for the local parser. Fall back to
+  // the first setting if a facility has named its equivalent differently.
+  return names.find((name) => /cmx\s*3600/i.test(name)) || names[0]
+}
+
+function makeExportEdlRequest(mobId, track, edlSettingsName) {
   const req = new ExportEDLRequest()
   const body = new ExportEDLRequestBody()
   body.setMobId(mobId)
+  if (edlSettingsName && body.setEdlSettingsName) body.setEdlSettingsName(edlSettingsName)
   if (track) {
     const tl = new TrackList()
     const lbl = new TrackLabel()
@@ -489,10 +533,38 @@ function makeExportEdlRequest(mobId, track) {
 
 async function requestEdlPath(mobId, track) {
   const client = requireClient()
-  const req = makeExportEdlRequest(mobId, track)
+  const names = await getEdlSettingNames()
+  const edlSettingsName = preferredEdlSetting(names)
+  const req = makeExportEdlRequest(mobId, track, edlSettingsName)
+  logMcapiVerbose('exportEDL request', { setting: edlSettingsName, track: track ? 'V' + track.number : 'all' })
   const res = await callUnary(client, 'exportEDL', req, getAccessTokenMetadata(), 120000)
   const b = res && res.getBody ? res.getBody() : null
+  const dialogs = b && b.getDialogContentsList ? b.getDialogContentsList() : []
+  if (dialogs.length) logMcapiVerbose('exportEDL dialog contents', dialogs)
   return b && b.getPath ? String(b.getPath() || '').trim() : ''
+}
+
+async function parseAllTrackEdl({ mobId, parseEdl }) {
+  if (!parseEdl) return []
+  const path = await requestEdlPath(mobId, null)
+  return path ? await parseEdl(path) : []
+}
+
+function clipsForTrack(clips, track) {
+  const target = 'V' + track.number
+  return (clips || []).filter((clip) => String(clip.track || '').toUpperCase() === target)
+}
+
+function isEdlFileSaveFailure(error) {
+  return /EDL file not saved/i.test(String(error && error.message ? error.message : error))
+}
+
+function edlFileSaveFailure(error) {
+  const detail = error && error.message ? ': ' + error.message : ''
+  return new Error(
+    'Media Composer could not save its temporary EDL file. ' +
+    'Fully quit and reopen Media Composer, then retry Analyze Stack' + detail
+  )
 }
 
 // Run ExportEDL for one track; returns the EDL file path MC wrote.
@@ -513,21 +585,13 @@ async function parseTrackEdl({ mobId, track, parseEdl }) {
   if (!parseEdl) return []
 
   try {
+    const allClips = await parseAllTrackEdl({ mobId, parseEdl })
+    return clipsForTrack(allClips, track)
+  } catch (directError) {
+    if (isEdlFileSaveFailure(directError)) throw directError
+    logMcapiVerbose('all-track exportEDL V' + track.number + ' failed — retrying per-track', directError.message)
     const path = await exportEdlForTrack(mobId, track)
     return path ? await parseEdl(path) : []
-  } catch (directError) {
-    logMcapiVerbose('exportEDL V' + track.number + ' rejected — retrying all tracks', directError.message)
-    const path = await requestEdlPath(mobId, null)
-    if (!path) throw directError
-
-    const target = 'V' + track.number
-    const allClips = await parseEdl(path)
-    const clips = allClips.filter((clip) => String(clip.track || '').toUpperCase() === target)
-    logMcapiVerbose('all-track EDL fallback V' + track.number, {
-      totalClips: allClips.length,
-      matchingClips: clips.length,
-    })
-    return clips
   }
 }
 
@@ -645,9 +709,9 @@ async function extendWithHandles({ mobId, binPath, handles }) {
   return { items: [], head: 0, end: 0 }
 }
 
-// Find the clip under the playhead on ONE video track, via that track's own EDL
-// (ExportEDL honors track_list — confirmed). Avid can only isolate a track on
-// export via enabled_tracks_only, so the track must be enabled.
+// Find the clip under the playhead on ONE video track, filtering a complete EDL
+// so Avid only has to allocate one temporary ExportEDL file per operation.
+// A per-track request remains as a fallback for older/problematic MC builds.
 // Returns { track, target, fps, allTracks }.
 async function chooseTrackAndTarget({ sequenceMobId, atTC, parseEdl, trackNumber = 1 }) {
   const allTracks = await getMobTrackInfo(sequenceMobId)
@@ -660,21 +724,30 @@ async function chooseTrackAndTarget({ sequenceMobId, atTC, parseEdl, trackNumber
   logMcapiVerbose('chosen track', { chosen: track })
   const fps = 24
 
-  const clips = await parseTrackEdl({ mobId: sequenceMobId, track, parseEdl })
+  let allEdl = null
+  try {
+    allEdl = await parseAllTrackEdl({ mobId: sequenceMobId, parseEdl })
+  } catch (e) {
+    if (isEdlFileSaveFailure(e)) throw edlFileSaveFailure(e)
+    logMcapiVerbose('all-track EDL failed — using per-track fallback', e.message)
+  }
+  const clips = allEdl
+    ? clipsForTrack(allEdl, track)
+    : await parseTrackEdl({ mobId: sequenceMobId, track, parseEdl })
   logMcapiVerbose(label + ' EDL clips', { count: clips.length, numSegments: track.numSegments, clips: clips.map((c) => ({ n: c.clip_name, in: c.rec_in, out: c.rec_out })) })
   const target = findClipAtPlayhead(clips, atTC, fps)
   if (!target) {
     throw new Error('No ' + label + ' clip at ' + atTC + '. Park on the shot first.')
   }
   logMcapiVerbose('target clip', { atTC, clip: target.clip_name, rec_in: target.rec_in, rec_out: target.rec_out, src_in: target.src_in, src_out: target.src_out })
-  return { track, target, fps, allTracks }
+  return { track, target, fps, allTracks, allEdl }
 }
 
 // Enumerate the plate stack under the playhead: every video track carrying a
 // clip there, bottom (V1) first. This is the grab PLAN — run it once while the
 // tracks are in their normal (all-enabled) state, then grab each plate in its
-// own pass. Per-track enumeration is reliable because ExportEDL honors
-// track_list; per-track media export is not, which is why passes exist.
+// own pass. The complete EDL is filtered locally so this scan does not create
+// one temporary ExportEDL file per track.
 export async function analyzeStack({ parseEdl }) {
   const shot = await getCurrentShot()
   const allTracks = await getMobTrackInfo(shot.mobId)
@@ -682,10 +755,20 @@ export async function analyzeStack({ parseEdl }) {
   const vids = allTracks
     .filter((t) => t.type === TRACKTYPE_PICTURE && t.numSegments > 0)
     .sort((a, b) => a.number - b.number)
+  let allEdl = null
+  try {
+    allEdl = await parseAllTrackEdl({ mobId: shot.mobId, parseEdl })
+    logMcapiVerbose('stack all-track EDL', { clips: allEdl.length })
+  } catch (e) {
+    if (isEdlFileSaveFailure(e)) throw edlFileSaveFailure(e)
+    logMcapiVerbose('stack all-track EDL failed — using per-track fallback', e.message)
+  }
   const stack = []
   for (const t of vids) {
     try {
-      const clips = await parseTrackEdl({ mobId: shot.mobId, track: t, parseEdl })
+      const clips = allEdl
+        ? clipsForTrack(allEdl, t)
+        : await parseTrackEdl({ mobId: shot.mobId, track: t, parseEdl })
       const c = findClipAtPlayhead(clips, shot.playheadTC, fps)
       logMcapiVerbose('stack scan V' + t.number, c
         ? { clip: c.clip_name, span: c.rec_in + ' → ' + c.rec_out, enabled: t.enabled }
@@ -712,7 +795,15 @@ async function grabSourceHandledMob({ sequenceMobId, atTC, atFrame, parseEdl, de
   const destPath = await resolveBinPath(destBinPath)
   await ensureBin(scratchBin)
   const scratchPath = await resolveBinPath(scratchBin)
-  const { track, target, fps, allTracks } = await chooseTrackAndTarget({ sequenceMobId, atTC, parseEdl, trackNumber })
+  const { track, target, fps, allTracks, allEdl: chosenEdl } = await chooseTrackAndTarget({ sequenceMobId, atTC, parseEdl, trackNumber })
+  let allEdl = chosenEdl
+  if (!allEdl) {
+    try {
+      allEdl = await parseAllTrackEdl({ mobId: sequenceMobId, parseEdl })
+    } catch (e) {
+      logMcapiVerbose('grab isolation all-track EDL failed — using per-track fallback', e.message)
+    }
+  }
   const wantTrack = 'V' + track.number
 
   // ISOLATION GUARD. CreateSubClip does NOT fan one subclip per enabled track
@@ -728,7 +819,9 @@ async function grabSourceHandledMob({ sequenceMobId, atTC, atFrame, parseEdl, de
     if (t.type !== TRACKTYPE_PICTURE || t.number === track.number) continue
     if (!t.enabled || !t.numSegments) continue
     try {
-      const cl = await parseTrackEdl({ mobId: sequenceMobId, track: t, parseEdl })
+      const cl = allEdl
+        ? clipsForTrack(allEdl, t)
+        : await parseTrackEdl({ mobId: sequenceMobId, track: t, parseEdl })
       const c = findClipAtPlayhead(cl, atTC, fps)
       // numSegments tells us how many clips this track really has. If the EDL
       // came back with a wildly different count, ExportEDL did NOT isolate the
