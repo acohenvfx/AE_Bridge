@@ -30,6 +30,8 @@ import {
   ExportFileRequestBody,
   GetListOfExportSettingsRequest,
   GetListOfExportSettingsRequestBody,
+  GetListOfExportEDLSettingsRequest,
+  GetListOfExportEDLSettingsRequestBody,
   GetMarkersRequest,
   GetMarkersRequestBody,
   GetListOfCommandsRequest,
@@ -56,6 +58,7 @@ import {
 import {
   clipsForTrack,
   hasNumberedUpperTracks,
+  preferredEdlSetting,
 } from '~/utils/api/edlPlan.mjs'
 import { recoverEdl } from '~/utils/api/aebridge.js'
 
@@ -472,14 +475,38 @@ export function enabledVideoTracks(tracks) {
     .sort((a, b) => a.number - b.number)
 }
 
-function makeExportEdlRequest(mobId, track) {
+let edlSettingsPromise = null
+
+async function getRequiredEdlSetting() {
+  if (!edlSettingsPromise) {
+    edlSettingsPromise = (async () => {
+      const client = requireClient()
+      const req = new GetListOfExportEDLSettingsRequest()
+      req.setBody(new GetListOfExportEDLSettingsRequestBody())
+      const res = await callUnary(client, 'getListOfExportEDLSettings', req, getAccessTokenMetadata())
+      const body = res && res.getBody ? res.getBody() : null
+      const names = body && body.getSettingNamesList
+        ? body.getSettingNamesList().map((name) => String(name || '').trim()).filter(Boolean)
+        : []
+      const chosen = preferredEdlSetting(names)
+      if (!chosen) {
+        throw new Error('Required Avid List Tool preset “VFX toolkit edl” was not found. Available presets: ' + (names.join(', ') || 'none'))
+      }
+      logMcapiVerbose('EDL setting selected', chosen)
+      return chosen
+    })().catch((error) => {
+      edlSettingsPromise = null
+      throw error
+    })
+  }
+  return edlSettingsPromise
+}
+
+function makeExportEdlRequest(mobId, track, settingName) {
   const req = new ExportEDLRequest()
   const body = new ExportEDLRequestBody()
   body.setMobId(mobId)
-  // Deliberately leave edl_settings_name empty. Per MCAPI this uses Media
-  // Composer's default EDL setting. Choosing the first List Tool setting is
-  // unsafe: on this workstation it is "Default Change List", whose legacy
-  // filename increment reached 1000 and made ExportEDL report ErrorType 1000.
+  body.setEdlSettingsName(settingName)
   if (track) {
     const tl = new TrackList()
     const lbl = new TrackLabel()
@@ -507,9 +534,10 @@ function edlFileSaveFailure(error) {
 
 async function requestEdlPath(mobId, track, sequenceName = '') {
   const client = requireClient()
-  const req = makeExportEdlRequest(mobId, track)
+  const settingName = await getRequiredEdlSetting()
+  const req = makeExportEdlRequest(mobId, track, settingName)
   logMcapiVerbose('exportEDL request', {
-    setting: 'Media Composer default EDL setting',
+    setting: settingName,
     track: track ? 'V' + track.number : 'all',
   })
   let res
