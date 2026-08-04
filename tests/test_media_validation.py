@@ -81,3 +81,49 @@ def test_validate_video_blocks_wrong_rate_size_and_duration():
     assert "frame rate" in report.detail
     assert "resolution" in report.detail
     assert "frame count" in report.detail
+
+
+def test_validate_video_skips_frame_count_check_when_never_captured():
+    """expected_frame_count == 0 means the count was never captured at grab
+    time (a real, reproduced gap — see HANDOFF.md), not a confirmed mismatch.
+    It must not permanently block Import: rate/resolution still gate, but the
+    frame-count check is skipped rather than an unconditional failure."""
+    report = media.validate_video(
+        {
+            "frame_rate": 24000 / 1001,
+            "frame_rate_raw": "24000/1001",
+            "width": 1920,
+            "height": 1080,
+            "frame_count": 197,
+        },
+        expected_frame_rate="23.98",
+        expected_width=1920,
+        expected_height=1080,
+        expected_frame_count=0,
+    )
+
+    assert report.passed
+    assert report.frame_count_ok
+    assert "not checked" in report.detail
+    assert "unknown" not in report.detail
+
+
+def test_validate_video_still_blocks_wrong_rate_when_frame_count_unknown():
+    """The frame-count skip must not weaken the other guardrails."""
+    report = media.validate_video(
+        {
+            "frame_rate": 30.0,
+            "frame_rate_raw": "30/1",
+            "width": 1920,
+            "height": 1080,
+            "frame_count": 197,
+        },
+        expected_frame_rate="23.98",
+        expected_width=1920,
+        expected_height=1080,
+        expected_frame_count=0,
+    )
+
+    assert not report.passed
+    assert not report.rate_ok
+    assert report.frame_count_ok

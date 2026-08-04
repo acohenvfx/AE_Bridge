@@ -106,10 +106,19 @@ def validate_video(
         actual.get('width') == expected_width
         and actual.get('height') == expected_height
     )
+    # expected_frame_count <= 0 means the count was never captured at grab time
+    # (see HANDOFF.md), not that a mismatch was confirmed — treating it as a
+    # guaranteed failure permanently blocked Import for any such job, with no
+    # way to recover since the expected value can't be filled in after the
+    # fact. Skip the check rather than fail it; still say so in the detail so
+    # the gap in coverage isn't silent.
+    frame_count_known = expected_frame_count > 0
     frame_count_ok = (
-        expected_frame_count > 0
-        and actual.get('frame_count') is not None
-        and actual.get('frame_count') == expected_frame_count
+        not frame_count_known
+        or (
+            actual.get('frame_count') is not None
+            and actual.get('frame_count') == expected_frame_count
+        )
     )
 
     details = []
@@ -121,11 +130,13 @@ def validate_video(
     if not resolution_ok:
         actual_size = f"{actual.get('width') or '?'}x{actual.get('height') or '?'}"
         details.append(f'resolution {actual_size} != expected {expected_width}x{expected_height}')
-    if not frame_count_ok:
+    if frame_count_known and not frame_count_ok:
         details.append(
             f"frame count {actual.get('frame_count') or 'unknown'} "
-            f"!= expected {expected_frame_count or 'unknown'}"
+            f"!= expected {expected_frame_count}"
         )
+    elif not frame_count_known:
+        details.append('frame count not checked (no expected count captured before Send)')
     detail = '; '.join(details) or (
         f"validated {actual.get('width')}x{actual.get('height')} / "
         f"{actual.get('frame_rate_raw') or actual.get('frame_rate')} fps / "
