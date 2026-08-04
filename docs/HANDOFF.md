@@ -31,9 +31,10 @@ All three shapes confirmed by the user on real MXF media:
    **Grab V<n> for all shots** once per track → **Send N shots** → N jobs, N
    comps, N renders returning independently.
 
-Also verified: **`plateOffsets` in AE** — a stack whose tracks have different
-spans lands with the layers correctly offset (this had only been unit-tested
-until now, since every earlier test stack shared one span).
+**SUPERSEDED 2026-08-04 — see the `plateOffsets` fact below.** The claim that
+different-span rec_in comparison was verified turned out to rest on a case
+that never exercises the actual bug; `plateOffsets` was rewritten to use
+`head_handles` instead of cross-track `rec_in` comparison.
 
 What is NOT verified: auto-solo (parked — see the `DoCommand` fact), and a
 real Avid/After Effects return through the new `ffprobe` guardrail.
@@ -89,6 +90,92 @@ what is under the playhead, without grabbing anything.
 
 ## Hard-won MCAPI facts (do NOT relearn the slow way)
 
+- **`ExportEDL` ErrorType 1000 "EDL file not saved" = Avid's FILENAME COUNTER IS
+  FULL, not a code bug.** Avid names EDL exports `<SequenceName>.NNN.edl` with a
+  three-digit counter in `~/Avid EDL Exports`. Once `001`–`999` all exist for a
+  sequence name, it cannot allocate a filename and every `ExportEDL` fails —
+  which takes down Analyze, the stack scan and the range scan at once, since all
+  of them start with an EDL. DIAGNOSED 2026-08-03 after 999 files had
+  accumulated (409 of them zero-byte failures).
+  **Fix:** archive or delete that folder's EDLs for the sequence —
+  `mkdir -p ~/"Avid EDL Exports/_archive" && mv ~/"Avid EDL Exports"/<SEQ>.*.edl ~/"Avid EDL Exports/_archive"/`.
+  No Avid restart needed.
+  **Why it fills so fast:** `analyzeStack` exports ONE EDL PER VIDEO TRACK — a
+  7-track sequence burns 7 filenames per click, so the ceiling is roughly 140
+  analyses per sequence name, ever. `edl_recovery.py` archives EDLs on the
+  error-1000 path, but the SUCCESS path leaves them, which is what fills the
+  counter.
+  **FIXED 2026-08-04: delete-after-parse cleanup, built on top of a second bug
+  in the same file.** `AVID_GENERATED_EDL_ROOT` in `service/edl_recovery.py`
+  was set to `/Users/Shared/AvidMediaComposer/Avid Users` — a guess that was
+  never checked against a real install. CONFIRMED wrong by directory listing:
+  772 EDLs live directly under `~/Avid EDL Exports`, zero under the configured
+  root. Because of that, `archive_generated_edl`'s move-condition never matched
+  on the normal SUCCESS path (it only ever fired via the error-1000 recovery
+  flow, whose `find_recent_edl` search also included the wrong root — so that
+  path's "verified" status rested on the `~/Desktop` fallback, not the real
+  folder). Fixed the constant to `Path.home() / "Avid EDL Exports"`. With that
+  corrected, `POST /v1/aebridge/parse-edl` (`service/routers/aebridge.py`) now
+  deletes the EDL after a successful parse — `_delete_scratch_edl()` unlinks
+  whatever `archive_generated_edl` left `path` pointing at (the moved copy
+  under `settings.roots.edl_root`, or the original if archiving didn't apply),
+  restricted via `ensure_within(path, [AVID_GENERATED_EDL_ROOT,
+  settings.roots.edl_root])` so a parse call can never be used to delete an
+  arbitrary client-supplied path — a manual EDL outside both roots survives
+  untouched. A delete failure never fails the parse response; the clip data is
+  already extracted. Tests: `test_parse_edl_deletes_avid_generated_scratch`,
+  `test_parse_edl_leaves_a_manual_edl_alone` (`tests/test_smoke.py`).
+  **Not cleaned up:** the 700+ pre-existing EDLs already sitting in
+  `~/Avid EDL Exports` from before this fix (mostly `DE_DEMO_NEW`, `test_new`,
+  `DE_DEMO_OLD` — dev-machine test debris, none near the 999 ceiling as of this
+  writing). The fix only stops new accumulation; archiving/deleting the
+  backlog is a manual call since it's the user's real folder.
+  **Lesson:** this presented as "everything broke today" and prompted a rollback
+  through the whole day's commits. It was environmental the entire time; the
+  commits being reverted were the *workarounds* for it. Establish the symptom
+  before rolling back.
+- **`plateOffsets` — FIXED 2026-08-04: per-track EDL `rec_in` cannot be trusted
+  to agree across tracks, even for clips confirmed at the identical timecode
+  in Avid.** Real bug, live-diagnosed via the on-screen MCAPI log against a
+  real stack grab: V1's per-track EDL scan resolved to the clip
+  **immediately before** the marked shot (`rec_in 01:02:37:01`) while V2/V3's
+  correctly resolved to the shot itself (`rec_in 01:03:03:01`, matching the
+  sequence's own `Mark IN`) — a 624-frame disagreement between two per-track
+  `ExportEDL` calls for clips the user confirmed sit at the same timecode. The
+  `headFrame` actually passed to `CreateSubClip` (Avid's own live API, not the
+  EDL) was identical for all three tracks and produced the correct media in
+  every plate — only the `rec_in` bookkeeping used for the AE layer offset was
+  wrong, so V2 landed ~26s into a comp sized to an ~18s shot: invisible,
+  looked like "the plate is offset for no reason."
+  **Fix:** `plateOffsets` (moved to its own pure module,
+  `src/utils/api/plateOffsets.mjs`, importable by plain Node — timeline.js
+  itself can't be, it needs webpack's `~` alias) no longer compares `rec_in`
+  across tracks at all. Every track in a stack is grabbed at the SAME
+  `headFrame`/`atTC` — `doGrab`/`doGrabTrackAcrossRange` never vary it per
+  track — so aligning that one shared instant only needs each plate's own
+  `head_handles` (tracked within a single grab's own pass, never crossing
+  tracks): `offset_frames = base.head_handles - p.head_handles`. This also
+  means there is no real code path today where two plates of one stack are
+  legitimately grabbed at different positions, which is why the fix is a
+  straight replacement rather than a fallback — the "different spans, offset
+  correctly" claim below turned out to rest on a test case that never
+  exercised the actual cross-track EDL disagreement. Test:
+  `tests/test_plate_offsets.mjs` (`yarn test:offsets`), including the exact
+  624-frame regression case.
+  **Diagnosis method worth repeating:** a live watcher (`find -newer` polling
+  `~/Avid EDL Exports` + the plates folder, copying every new `.edl` out
+  before the delete-after-parse fix above could remove it) plus the user
+  pasting the on-screen MCAPI log (`target clip` / `grabbed plate` / `sending
+  plates` lines) is what actually cracked this — file/EDL archaeology alone
+  kept producing plausible-sounding but wrong theories (VFX toolkit preset
+  losing track labels, drop-frame math, aux timecode columns). None of those
+  were it.
+- **Avid's WebView caches the panel bundle across panel closes AND Media
+  Composer restarts.** After a rollback it will happily keep running newer code,
+  and the build pill is the only way to notice. `build/manifest.mjs` appends a
+  timestamp query to the dev URL (`/app?v=<stamp>`) so every `yarn build:panel`
+  is a new cache key; override with `AEB_CACHE_BUST=`. Release mode is
+  untouched (no query), so the signed `.avpi` story is unchanged.
 - **MCAPI runs in the PANEL (WebView), not the helper.** Avid injects the
   gateway + token into the panel only. All timeline/MCAPI work is in
   `timeline.js`. The helper does filesystem/AE/paths.

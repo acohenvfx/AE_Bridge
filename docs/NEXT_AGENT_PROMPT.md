@@ -54,6 +54,51 @@ rendering correctly in Avid.
   markup, not just the prose** — on the one imported so far they disagreed
   twice, and the markup was right both times.
 
+**If Analyze / stack scan / range scan all fail at once with
+`ExportEDL ErrorType 1000 "EDL file not saved"`, it is NOT the code** — Avid's
+`<SEQ>.NNN.edl` filename counter in `~/Avid EDL Exports` is full (001–999).
+Archive that folder's EDLs and it works again. AEBridge burns one filename per
+video track per analyze, so it refills fast. See HANDOFF.md.
+
+**FIXED 2026-08-04: EDLs are now deleted after a successful parse**, so this
+should mostly stop recurring for future sessions (the 700+ pre-existing files
+in `~/Avid EDL Exports` from before the fix are still there — untouched
+deliberately, see HANDOFF.md — but none were near the ceiling). This also
+fixed a second, previously-undiscovered bug: `AVID_GENERATED_EDL_ROOT` in
+`service/edl_recovery.py` pointed at a folder Avid never actually writes to,
+so the error-1000 recovery search wasn't scanning the real export directory
+either. See HANDOFF.md for the full story and the two regression tests.
+
+**FIXED 2026-08-04: `plateOffsets` stacking bug — a stack's upper plate could
+land far outside the AE comp.** Root cause was NOT the AE script, the handle
+ladder, or the "VFX toolkit edl" preset losing track labels (all suspected and
+ruled out first) — it was that two separate per-track `ExportEDL` calls for
+clips confirmed at the identical Avid timecode returned `rec_in` 624 frames
+apart, and the old formula compared `rec_in` across tracks. Fixed by aligning
+plates on `head_handles` alone (every track in a stack shares one `headFrame`
+anchor by construction, so no cross-track EDL comparison is needed at all).
+See HANDOFF.md for the full diagnosis and `tests/test_plate_offsets.mjs`
+(`yarn test:offsets`) for the regression case. **The bug that reported it**
+also surfaced Bug 1 below, still open.
+
+**FIXED 2026-08-04: `frame_count` validation no longer permanently blocks
+Import when the expected count is 0/uncaptured.** Confirmed on a real job
+(`260804_testCAM_101_001_0140_pl01`, `frame_count: 0` in its sidecar) — Import
+either errored `"frame count 197 != expected unknown"` or silently did
+nothing, forever, since the expected value can never be filled in after the
+fact. `service/media.py`'s `validate_video` now treats `expected_frame_count
+<= 0` as "never captured, skip this one check" rather than "confirmed
+mismatch" — rate/resolution still gate normally, and the skip is called out
+in `ValidationReport.detail` ("frame count not checked...") rather than
+silently passing. Tests:
+`test_validate_video_skips_frame_count_check_when_never_captured`,
+`test_validate_video_still_blocks_wrong_rate_when_frame_count_unknown`
+(`tests/test_media_validation.py`). Helper restart required (Python change).
+**Not investigated:** why `frame_count` ends up 0 for some shots in the first
+place (`grabShot()` in `timeline.js` derives it from bin columns that should
+have worked here) — the skip fixes the symptom, not that root cause, so it's
+still worth a look if it keeps happening.
+
 **Suspect any remaining "can't be done" claim.** Three fell this session — the
 per-track fan, `DoCommand` being denied to panels (it was a missing manifest
 scope), and marks being unreadable (they're in the mob columns). Retest before
@@ -63,7 +108,8 @@ designing around a limitation.
 1. **Scratch-bin cleanup.** `AEBridge_Scratch` gains a subclip per plate per
    pass and a range batch fills it fast. No delete-mob API; needs real
    investigation. Most likely daily irritation.
-2. **Return validation** (`ffprobe` rate/res/frame-count) is still stubbed — the
-   guardrail against cutting in a wrong-rate temp.
-3. **Auto-solo**, if manual track toggling grates. One click of **Try auto-solo**
+2. **Auto-solo**, if manual track toggling grates. One click of **Try auto-solo**
    (Diagnostics) reveals whether it's a focus problem or the wrong flag.
+3. **Why `frame_count` reads 0** for some shots (see FIXED note above) — the
+   validation gate no longer blocks on it, but the root cause in `grabShot()`
+   is still unexplained.
