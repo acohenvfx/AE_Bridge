@@ -99,7 +99,7 @@ from ..models import (
     ValidationReport,
 )
 from .. import edl as edl_parser
-from ..edl_recovery import archive_generated_edl, find_recent_edl
+from ..edl_recovery import AVID_GENERATED_EDL_ROOT, archive_generated_edl, find_recent_edl
 from ..paths import (
     PathNotAllowed,
     ensure_within,
@@ -147,6 +147,27 @@ def ae_status() -> dict:
     return ae.diagnostics()
 
 
+def _delete_scratch_edl(path: Path) -> None:
+    """Best-effort cleanup of an EDL once it has been parsed.
+
+    The EDL is pure scratch — nothing reads it again after parse-edl returns —
+    and leaving it in place is what fills Avid's three-digit `<SEQ>.NNN.edl`
+    filename counter (see HANDOFF.md). Deletion is restricted to paths under a
+    known EDL root (Avid's own export folder or AEBridge's archive) so a parse
+    call can never be used to delete an arbitrary file elsewhere on disk. A
+    failed delete must never fail the parse response — the clip data is
+    already extracted and the caller needs it regardless.
+    """
+    try:
+        ensure_within(path, [AVID_GENERATED_EDL_ROOT, settings.roots.edl_root])
+    except PathNotAllowed:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 # --- EDL parse (clip enumeration) -----------------------------------------
 @router.post("/parse-edl", response_model=ParseEdlResponse)
 def parse_edl(req: ParseEdlRequest) -> ParseEdlResponse:
@@ -158,6 +179,7 @@ def parse_edl(req: ParseEdlRequest) -> ParseEdlResponse:
         events = edl_parser.read_and_parse(path, req.rec_in, req.rec_out, req.fps)
     except FileNotFoundError:
         raise HTTPException(status_code=400, detail=f"EDL not found: {path}")
+    _delete_scratch_edl(path)
     return ParseEdlResponse(clips=[
         EdlClip(num=e.num, track=e.track, clip_name=e.clip_name, rec_in=e.rec_in, rec_out=e.rec_out,
                 src_in=e.src_in, src_out=e.src_out)

@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 
-AVID_GENERATED_EDL_ROOT = Path("/Users/Shared/AvidMediaComposer/Avid Users")
+# Where Avid actually writes ExportEDL output: `<SequenceName>.NNN.edl` with a
+# three-digit per-sequence-name counter (001-999) that fills up and then makes
+# EVERY export under that name fail with ErrorType 1000 (see HANDOFF.md).
+# CONFIRMED against a real installation 2026-08-04: 772 EDLs live directly
+# under `~/Avid EDL Exports`; zero exist under the previous guess below.
+AVID_GENERATED_EDL_ROOT = Path.home() / "Avid EDL Exports"
 
 DEFAULT_EDL_ROOTS = (
     AVID_GENERATED_EDL_ROOT,

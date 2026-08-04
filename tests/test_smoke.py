@@ -206,6 +206,58 @@ def test_path_escape_rejected():
         assert r.status_code == 400
 
 
+_EDL_TEXT = (
+    "TITLE: STACK_TEST\n"
+    "001  AX  V   C  01:00:00:00 01:00:01:00 01:00:00:00 01:00:01:00\n"
+    "* FROM CLIP NAME: BASE\n"
+)
+
+
+def test_parse_edl_deletes_avid_generated_scratch():
+    """The EDL is pure scratch once parsed — leaving it behind is what fills
+    Avid's three-digit filename counter (ErrorType 1000, see HANDOFF.md).
+    A file that looks like Avid's own export must be gone after a successful
+    parse, whether ExportEDL returned it directly or it came back through the
+    error-1000 recovery path (which archives it into edl_root first)."""
+    import service.edl_recovery as _edl_recovery
+
+    fake_avid_root = Path(_TMP) / "fake_avid_edl_exports"
+    fake_avid_root.mkdir(parents=True, exist_ok=True)
+    previous_recovery = _edl_recovery.AVID_GENERATED_EDL_ROOT
+    previous_router = _aebridge.AVID_GENERATED_EDL_ROOT
+    _edl_recovery.AVID_GENERATED_EDL_ROOT = fake_avid_root
+    _aebridge.AVID_GENERATED_EDL_ROOT = fake_avid_root
+    try:
+        edl_path = fake_avid_root / "STACK_TEST.001.edl"
+        edl_path.write_text(_EDL_TEXT, encoding="utf-8")
+        with TestClient(app) as c:
+            r = c.post("/v1/aebridge/parse-edl", json={"edl_path": str(edl_path)})
+        assert r.status_code == 200, r.text
+        clips = r.json()["clips"]
+        assert [clip["clip_name"] for clip in clips] == ["BASE"]
+        # Archived into edl_root by archive_generated_edl, then deleted as
+        # scratch — nothing should be left at either location.
+        assert not edl_path.exists()
+        assert not any(settings.roots.edl_root.glob("STACK_TEST*.edl"))
+    finally:
+        _edl_recovery.AVID_GENERATED_EDL_ROOT = previous_recovery
+        _aebridge.AVID_GENERATED_EDL_ROOT = previous_router
+
+
+def test_parse_edl_leaves_a_manual_edl_alone():
+    """A path outside every known EDL root (a user's own manual EDL) must
+    survive parsing untouched — deletion is scoped to Avid-generated scratch,
+    never an arbitrary client-supplied path."""
+    manual = Path(_TMP) / "manual_edls" / "hand_made.edl"
+    manual.parent.mkdir(parents=True, exist_ok=True)
+    manual.write_text(_EDL_TEXT, encoding="utf-8")
+    with TestClient(app) as c:
+        r = c.post("/v1/aebridge/parse-edl", json={"edl_path": str(manual)})
+    assert r.status_code == 200, r.text
+    assert [clip["clip_name"] for clip in r.json()["clips"]] == ["BASE"]
+    assert manual.exists()
+
+
 # --- helpers to reach into the in-memory store for simulation ---
 from service.jobs import store as _store  # noqa: E402
 from service.models import JobState as _JobState  # noqa: E402
@@ -344,6 +396,8 @@ if __name__ == "__main__":
     test_existing_project_via_picked_token()
     test_multi_plate_send()
     test_path_escape_rejected()
+    test_parse_edl_deletes_avid_generated_scratch()
+    test_parse_edl_leaves_a_manual_edl_alone()
     test_renders_feature_is_advertised()
     test_missing_plate_reported()
     test_renders_listing_and_reset()
