@@ -1,0 +1,35 @@
+// Cloudflare Worker config for the HOSTED panel UI.
+//
+// AEBridge's hosted UI is a Worker with a static Assets binding (not a Pages
+// project — that's DifferenceEngine). Cloudflare Workers Builds is Git-connected
+// to acohenvfx/AE_Bridge and runs, per the dashboard's build settings:
+//
+//     build:   yarn build:cloudflare      (package.json -> AEB_RELEASE=1 nuxt generate)
+//     deploy:  npx wrangler deploy        (this file)
+//
+// Builds were failing because neither existed: `build:cloudflare` had never
+// been in package.json, and no wrangler config was ever committed — so
+// `wrangler deploy` had nothing to read. Deploys had been happening manually
+// from a local machine instead, which is why the hosted copy went stale.
+//
+// AEB_RELEASE=1 matters: it sets HELPER_URL='' so the bundle calls /v1/...
+// RELATIVELY. That is correct here, because artists never load this origin
+// directly — the local helper proxies it onto http://localhost:8010 (see
+// service/routers/ui_proxy.py), making the UI same-origin with the API.
+//
+// NOT REPRODUCED HERE: the Content-Security-Policy currently served by
+// aebridge.andrewcoheneditor.com is not configured anywhere in this repo
+// (no _headers file, no Worker script) — it's set outside git, probably a zone
+// Transform Rule. Deploying from here will not recreate it. That's harmless
+// for the panel, because ui_proxy.py replaces the CSP with the panel's own
+// (which, unlike the hosted one, includes the 'unsafe-eval' the Nuxt 2 bundle
+// requires), but it does mean the public URL's headers may change.
+{
+  "name": "ae-bridge",
+  "compatibility_date": "2026-08-05",
+  "assets": {
+    // `yarn generate:release` / `build:cloudflare` output. Contains
+    // app/index.html (what the panel loads), _nuxt/* and the SPA fallback.
+    "directory": "./dist/html"
+  }
+}
