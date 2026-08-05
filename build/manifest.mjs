@@ -14,11 +14,18 @@ const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'))
 const isRelease = process.env.AEB_RELEASE === '1'
 const custom = process.env.APP_URL
 
+// The helper always runs locally, so its origins must stay allowed no matter
+// where the UI itself is served from — a remotely-hosted panel still calls
+// 127.0.0.1:8010 for every filesystem/AE operation. An earlier version of the
+// custom branch REPLACED the list with just the remote host, which would have
+// cut the panel off from its own helper.
+const HELPER_DOMAINS = ['localhost:8010', '127.0.0.1:8010']
+
 let url, allowedDomains
 if (custom) {
   url = custom
   const host = new URL(custom).host
-  allowedDomains = [host]
+  allowedDomains = [host, ...HELPER_DOMAINS.filter((d) => d !== host)]
 } else if (isRelease) {
   url = 'http://localhost:8010/app'
   allowedDomains = ['localhost:8010', '127.0.0.1:8010']
@@ -33,11 +40,20 @@ if (custom) {
   allowedDomains = ['localhost:3010', '127.0.0.1:3010', 'localhost:8010', '127.0.0.1:8010']
 }
 
+// PANEL_SUFFIX builds a SEPARATE, co-installable panel (its own manifest name,
+// menu item and window) rather than replacing the normal one. Avid keys a panel
+// off `name`, so a suffixed build sits beside the working AEBridge in Tools
+// instead of overwriting it — which is what you want when pointing a throwaway
+// build at a different URL to test something.
+const suffix = (process.env.PANEL_SUFFIX || '').trim()
+const slug = suffix ? suffix.toLowerCase().replace(/[^a-z0-9]/g, '') : ''
+const label = suffix ? `AEBridge ${suffix}` : 'AEBridge'
+
 const manifest = {
   category: 'suite-plugin',
-  name: 'com.acohenvfx.aebridge',
+  name: slug ? `com.acohenvfx.aebridge${slug}` : 'com.acohenvfx.aebridge',
   version: pkg.version || '0.0.1',
-  displayName: 'AEBridge',
+  displayName: label,
   description:
     'One-click round-trip between Avid Media Composer and After Effects for temp titles, graphics, and quick element comps.',
   // 'command' scope covers GetListOfCommands / DoCommand / IsCommandsEnabled.
@@ -52,14 +68,14 @@ const manifest = {
   subscribesToChannels: [],
   entitlements: [],
   companyPrefix: 'acohenvfx',
-  appShortName: 'aebridge',
+  appShortName: slug ? `aebridge${slug}` : 'aebridge',
   uiItems: [
     {
       type: 'dropdown',
       menuName: 'Tools',
-      id: 'aebridge-panel',
-      displayText: 'AEBridge',
-      windowTitle: 'AEBridge',
+      id: slug ? `aebridge-${slug}-panel` : 'aebridge-panel',
+      displayText: label,
+      windowTitle: label,
       icon: 'static/application.svg',
       url
     }
