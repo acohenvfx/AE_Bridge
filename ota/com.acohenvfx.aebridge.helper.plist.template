@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd job for the AEBridge helper.
+
+  Installed to ~/Library/LaunchAgents/com.acohenvfx.aebridge.helper.plist with
+  __LAUNCHER_PATH__ replaced by the installed launcher's absolute path.
+
+  It runs the LAUNCHER, not the helper app directly: the launcher checks for
+  updates and verifies the signature before exec'ing, and its path is stable
+  across helper versions.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.acohenvfx.aebridge.helper</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__LAUNCHER_PATH__</string>
+    </array>
+
+    <!-- Start at login and keep it up: the panel is useless without the
+         helper, and an artist has no obvious way to restart it by hand. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- The launcher exits 0 when another instance already holds port 8010.
+         Without this, KeepAlive would respawn it in a tight loop. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/helper.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/helper.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

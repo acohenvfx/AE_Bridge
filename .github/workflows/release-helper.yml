@@ -1,0 +1,160 @@
+name: Release helper binary
+
+# Over-the-air helper updates. Tag a release and this builds a signed, notarized
+# AEBridgeHelper.app for both Mac architectures and publishes it (plus checksums
+# and version.txt) to the distribution repo. ota/AEBridgeLauncher.sh picks it up
+# on its next start.
+#
+# Cut a release:  git tag helper-v0.1.0 && git push origin helper-v0.1.0
+
+on:
+  push:
+    tags: ['helper-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag, e.g. helper-v0.1.0'
+        required: true
+
+permissions:
+  contents: read
+
+# Two macOS runners per release. If several tags land together, only finish the
+# newest.
+concurrency:
+  group: release-helper
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15         # Apple silicon
+            arch: arm64
+          - runner: macos-15-intel   # Native Intel; avoids slow Rosetta builds
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The helper embeds the generated panel UI, so Node is needed here too.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Resolve version
+        id: ver
+        run: |
+          TAG="${{ github.event.inputs.version || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # Strip the helper-v prefix for the bundle's CFBundleVersion.
+          echo "version=${TAG#helper-v}" >> "$GITHUB_OUTPUT"
+
+      # Fail early and loudly: an unsigned helper would be rejected by the
+      # launcher's Team ID check on every artist machine, long after CI is green.
+      - name: Require Developer ID signing credentials
+        env:
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_DEVELOPER_ID: ${{ secrets.MAC_DEVELOPER_ID }}
+          MAC_NOTARY_APPLE_ID: ${{ secrets.MAC_NOTARY_APPLE_ID }}
+        run: |
+          missing=0
+          for v in MAC_CERT_P12_BASE64 MAC_DEVELOPER_ID MAC_NOTARY_APPLE_ID; do
+            if [ -z "${!v}" ]; then echo "::error::$v is not set"; missing=1; fi
+          done
+          [ "$missing" = "0" ]
+
+      - name: Install panel dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build panel UI
+        run: yarn generate:release
+
+      - name: Build helper bundle
+        env:
+          AEBRIDGE_RUNTIME_VERSION: ${{ steps.ver.outputs.version }}
+        run: bash ota/build-helper.sh
+
+      - name: Verify bundle architecture
+        run: |
+          ACTUAL=$(lipo -archs dist/AEBridgeHelper.app/Contents/MacOS/aebridge-helper)
+          echo "Built architecture: $ACTUAL (expected ${{ matrix.arch }})"
+          if [ "$ACTUAL" != "${{ matrix.arch }}" ]; then
+            echo "::error::Architecture mismatch: built $ACTUAL, expected ${{ matrix.arch }}"
+            exit 1
+          fi
+
+      # The native probe must cover BOTH architectures regardless of which
+      # runner built the helper — it is embedded as-is.
+      - name: Verify probe is universal
+        run: |
+          PROBE=dist/AEBridgeHelper.app/Contents/Frameworks/aebridge-probe
+          [ -f "$PROBE" ] || PROBE=$(find dist/AEBridgeHelper.app -name aebridge-probe -type f | head -1)
+          echo "probe: $PROBE"
+          lipo -info "$PROBE"
+          lipo -archs "$PROBE" | grep -q arm64
+          lipo -archs "$PROBE" | grep -q x86_64
+
+      - name: Sign, notarize and stage the asset
+        env:
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          MAC_DEVELOPER_ID: ${{ secrets.MAC_DEVELOPER_ID }}
+          MAC_NOTARY_APPLE_ID: ${{ secrets.MAC_NOTARY_APPLE_ID }}
+          MAC_NOTARY_TEAM_ID: ${{ secrets.MAC_NOTARY_TEAM_ID }}
+          MAC_NOTARY_PASSWORD: ${{ secrets.MAC_NOTARY_PASSWORD }}
+        run: |
+          bash ota/ci-sign-notarize-bundle.sh dist
+          mkdir -p out
+          # Asset layout must match install_bundle() in ota/AEBridgeLauncher.sh:
+          # a gzipped tar with AEBridgeHelper.app at its root.
+          tar -czf "out/AEBridgeHelper-${{ matrix.arch }}.tar.gz" -C dist AEBridgeHelper.app
+          ( cd out && shasum -a 256 "AEBridgeHelper-${{ matrix.arch }}.tar.gz" \
+              | awk '{print $1}' > "AEBridgeHelper-${{ matrix.arch }}.tar.gz.sha256" )
+
+      - name: Upload architecture assets
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: acohenvfx/AE_Bridge_Releases
+          token: ${{ secrets.RELEASES_REPO_PAT }}
+          tag_name: ${{ steps.ver.outputs.tag }}
+          make_latest: true
+          files: |
+            out/AEBridgeHelper-${{ matrix.arch }}.tar.gz
+            out/AEBridgeHelper-${{ matrix.arch }}.tar.gz.sha256
+
+  # Published only after BOTH architectures succeed: the launcher treats
+  # version.txt as "an update is available for my arch", so publishing it while
+  # one arch is missing would send those machines to a 404.
+  publish-version:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve version
+        id: ver
+        run: echo "tag=${{ github.event.inputs.version || github.ref_name }}" >> "$GITHUB_OUTPUT"
+      - name: Write version.txt
+        run: printf '%s' "${{ steps.ver.outputs.tag }}" > version.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          repository: acohenvfx/AE_Bridge_Releases
+          token: ${{ secrets.RELEASES_REPO_PAT }}
+          tag_name: ${{ steps.ver.outputs.tag }}
+          make_latest: true
+          files: version.txt
+
+# Required secrets on acohenvfx/AE_Bridge (the same ones DifferenceEngine uses,
+# except the PAT must grant access to AE_Bridge_Releases):
+#   RELEASES_REPO_PAT     - fine-grained PAT, Contents: write on AE_Bridge_Releases
+#   MAC_CERT_P12_BASE64   - base64 of the Developer ID Application .p12
+#   MAC_CERT_PASSWORD     - password for that .p12
+#   MAC_DEVELOPER_ID      - e.g. "Developer ID Application: Your Name (RRD4N3SXSG)"
+#   MAC_NOTARY_APPLE_ID   - Apple ID email for notarytool
+#   MAC_NOTARY_TEAM_ID    - Apple Developer Team ID
+#   MAC_NOTARY_PASSWORD   - app-specific password for notarytool
