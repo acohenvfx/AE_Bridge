@@ -26,6 +26,9 @@ def test_probe_video_reads_rational_rate_and_frame_count(tmp_path, monkeypatch):
             stderr="",
         )
 
+    # probe_video prefers the bundled native probe now, so force the ffprobe
+    # fallback branch — this test is specifically about parsing ffprobe output.
+    monkeypatch.setattr(media, "resolve_probe", lambda: None)
     monkeypatch.setattr(media.shutil, "which", lambda name: "/usr/bin/ffprobe")
     monkeypatch.setattr(media.subprocess, "run", fake_run)
 
@@ -127,3 +130,44 @@ def test_validate_video_still_blocks_wrong_rate_when_frame_count_unknown():
     assert not report.passed
     assert not report.rate_ok
     assert report.frame_count_ok
+
+
+def test_native_probe_matches_ffprobe_on_real_media():
+    """The native AVFoundation probe replaced ffprobe; it must agree with it.
+
+    The trap this guards: a QuickTime edit list ('elst') can present fewer
+    frames than the container stores. Counting stored samples reported 1071
+    for an Avid plate that ffprobe (and Avid) call 1067 — and validation
+    compares frame counts for EXACT equality, so that would have failed good
+    renders. Skips unless both probes and some real media are present.
+    """
+    import json as _json
+    import shutil as _shutil
+    import subprocess as _subprocess
+    from pathlib import Path as _Path
+
+    import pytest
+
+    probe = media.resolve_probe()
+    ffprobe = _shutil.which('ffprobe')
+    if not probe or not ffprobe:
+        pytest.skip('need both the native probe and ffprobe to compare')
+
+    media_dir = _Path.home() / 'Desktop' / 'AEBridge' / 'plates'
+    clips = sorted(media_dir.glob('*.mov'))[:3] if media_dir.is_dir() else []
+    if not clips:
+        pytest.skip('no sample media available')
+
+    for clip in clips:
+        out = _subprocess.run([probe, str(clip)], capture_output=True, text=True, check=True)
+        native = _json.loads(out.stdout)
+        ff = _subprocess.run(
+            [ffprobe, '-v', 'error', '-select_streams', 'v:0', '-count_frames',
+             '-show_entries', 'stream=width,height,nb_read_frames',
+             '-of', 'json', str(clip)],
+            capture_output=True, text=True, check=True,
+        )
+        stream = _json.loads(ff.stdout)['streams'][0]
+        assert native['width'] == stream['width'], clip.name
+        assert native['height'] == stream['height'], clip.name
+        assert native['frame_count'] == int(stream['nb_read_frames']), clip.name

@@ -9,6 +9,7 @@ API with no CORS and editorial data never leaves localhost.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from fastapi import APIRouter, Response
@@ -16,7 +17,19 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 
 router = APIRouter()
 
-_ROOT = Path(__file__).resolve().parent.parent.parent  # AE_Bridge/
+def _bundle_base() -> Path | None:
+    """Root of a PyInstaller bundle's payload, or None when running from source.
+
+    A frozen helper has no repo checkout around it: `dist/html` is bundled as
+    data and lands under sys._MEIPASS, not three parents up from this file.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    return None
+
+
+_BUNDLE = _bundle_base()
+_ROOT = _BUNDLE or Path(__file__).resolve().parent.parent.parent  # AE_Bridge/
 DIST_HTML = _ROOT / "dist" / "html"
 _LEGACY = Path(__file__).resolve().parent.parent / "ui" / "app.html"
 

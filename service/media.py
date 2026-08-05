@@ -6,6 +6,7 @@ import math
 import os
 import shutil
 import subprocess
+import sys
 from fractions import Fraction
 from pathlib import Path
 from typing import Any, Optional
@@ -31,13 +32,111 @@ def parse_frame_rate(value: Any) -> Optional[float]:
         return None
 
 
+def _bundled_ffprobe() -> Optional[str]:
+    """ffprobe shipped inside the frozen helper, if the build embedded one.
+
+    A distributed install cannot rely on ffprobe being on PATH — artists will
+    not have it — and without it EVERY import fails, because a probe error is
+    reported as a failed validation. See ota/aebridge-helper.spec.
+    """
+    if not getattr(sys, 'frozen', False):
+        return None
+    base = Path(getattr(sys, '_MEIPASS', Path(sys.executable).resolve().parent))
+    candidate = base / 'ffprobe'
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        return str(candidate)
+    return None
+
+
+def resolve_ffprobe() -> Optional[str]:
+    """Explicit override first, then a bundled copy, then PATH."""
+    return (
+        os.environ.get('AEBRIDGE_FFPROBE')
+        or _bundled_ffprobe()
+        or shutil.which('ffprobe')
+    )
+
+
+def _bundled_probe() -> Optional[str]:
+    """The native AVFoundation probe (native/aebridge-probe).
+
+    Preferred over ffprobe: it ships with the helper, so a distributed install
+    has no external dependency, and it avoids redistributing FFmpeg. Looked up
+    inside the frozen bundle first, then in the repo's build output so a source
+    checkout uses it too.
+    """
+    names = []
+    if getattr(sys, 'frozen', False):
+        base = Path(getattr(sys, '_MEIPASS', Path(sys.executable).resolve().parent))
+        names.append(base / 'aebridge-probe')
+    names.append(Path(__file__).resolve().parent.parent / 'dist' / 'native' / 'aebridge-probe')
+    for candidate in names:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def resolve_probe() -> Optional[str]:
+    """Explicit override first, then the native probe."""
+    return os.environ.get('AEBRIDGE_PROBE') or _bundled_probe()
+
+
+def _probe_native(exe: str, path: Path, timeout_s: int) -> dict[str, Any]:
+    """Run the native probe. Emits the same fields ffprobe did."""
+    try:
+        result = subprocess.run(
+            [exe, str(path)], capture_output=True, text=True,
+            timeout=timeout_s, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise MediaProbeError(f'probe failed: {exc}') from exc
+    if result.returncode != 0:
+        detail = (result.stderr or '').strip().splitlines()[-1:]
+        raise MediaProbeError(
+            f"probe rejected the return{': ' + detail[0] if detail else ''}"
+        )
+    try:
+        raw = json.loads(result.stdout or '{}')
+    except json.JSONDecodeError as exc:
+        raise MediaProbeError('probe returned no video stream metadata') from exc
+
+    def as_int(value: Any) -> Optional[int]:
+        try:
+            return None if value in (None, '') else int(value)
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        'frame_rate': parse_frame_rate(raw.get('frame_rate')),
+        'frame_rate_raw': str(raw.get('frame_rate_raw') or ''),
+        'width': as_int(raw.get('width')),
+        'height': as_int(raw.get('height')),
+        # Absent (not zero) when the probe could not determine it, so
+        # validate_video treats it as "not checked" rather than a mismatch.
+        'frame_count': as_int(raw.get('frame_count')),
+    }
+
+
 def probe_video(path: Path, timeout_s: int = 120) -> dict[str, Any]:
-    """Read the first video stream without invoking a shell."""
-    ffprobe = os.environ.get('AEBRIDGE_FFPROBE') or shutil.which('ffprobe')
-    if not ffprobe:
-        raise MediaProbeError('ffprobe is not installed or is not on PATH')
+    """Read the first video stream without invoking a shell.
+
+    Prefers the bundled native probe and falls back to ffprobe, so a dev
+    machine with ffprobe behaves exactly as before while a distributed install
+    needs nothing on PATH. Both return the identical dict shape.
+    """
     if not path.is_file() or path.stat().st_size <= 0:
         raise MediaProbeError('return file is missing or empty')
+
+    native = resolve_probe()
+    if native:
+        return _probe_native(native, path, timeout_s)
+
+    ffprobe = resolve_ffprobe()
+    if not ffprobe:
+        raise MediaProbeError(
+            'no media probe available: the bundled probe is missing and '
+            'ffprobe is not installed or is not on PATH'
+        )
 
     cmd = [
         ffprobe,
