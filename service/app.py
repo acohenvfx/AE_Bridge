@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import DEV_ORIGINS, settings
 from .integrations import ae
-from .routers import aebridge, ui, version
+from .routers import aebridge, ui, ui_proxy, version
 from .routers.ui import DIST_HTML
 from .watcher import watcher
 
@@ -30,7 +30,11 @@ app.add_middleware(
 # API routers first so /v1, /app, /healthz always win over the static mount.
 app.include_router(version.router)
 app.include_router(aebridge.router)
-app.include_router(ui.router)
+# Local UI and hosted-UI proxy are mutually exclusive: the proxy is a catch-all
+# and would otherwise shadow (or be shadowed by) the local /app route. With
+# AEBRIDGE_UI_ORIGIN unset this is exactly the old behaviour.
+if not ui_proxy.UI_ORIGIN:
+    app.include_router(ui.router)
 
 
 @app.on_event("startup")
@@ -47,13 +51,21 @@ def _shutdown() -> None:
 
 # Serve the generated Nuxt export (assets like /_nuxt/*, "/") if it exists.
 # Mounted LAST — lowest routing priority — per the EB secure-runtime pattern.
-if DIST_HTML.is_dir():
+# Skipped when proxying: the hosted origin serves its own assets.
+if not ui_proxy.UI_ORIGIN and DIST_HTML.is_dir():
     app.mount("/", StaticFiles(directory=str(DIST_HTML), html=True), name="ui")
 
 
 @app.get("/healthz")
 def healthz() -> dict:
     return {"ok": True, "ae": settings.ae_version}
+
+
+# The hosted-UI proxy is a catch-all, so it must be registered after every real
+# route — including /healthz above — or it would swallow them. It also refuses
+# the API namespaces itself (see is_local_only), belt and braces.
+if ui_proxy.UI_ORIGIN:
+    app.include_router(ui_proxy.router)
 
 
 def main() -> None:

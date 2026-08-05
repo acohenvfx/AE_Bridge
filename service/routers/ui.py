@@ -20,7 +20,10 @@ _ROOT = Path(__file__).resolve().parent.parent.parent  # AE_Bridge/
 DIST_HTML = _ROOT / "dist" / "html"
 _LEGACY = Path(__file__).resolve().parent.parent / "ui" / "app.html"
 
-_CSP = (
+# Public: ui_proxy.py applies this same policy to proxied HTML so the hosted
+# and local paths enforce one policy, and so a hosted CSP that omits
+# 'unsafe-eval' can't break the Nuxt 2 bundle that needs it.
+CSP = (
     "default-src 'self'; "
     "connect-src 'self' http://127.0.0.1:8010 http://localhost:8010 "
     "http://127.0.0.1:4930 http://localhost:4930; "
@@ -45,4 +48,4 @@ def app_page() -> Response:
         return PlainTextResponse(
             "AEBridge UI not built. Run `yarn generate:release`.", status_code=404
         )
-    return HTMLResponse(page.read_text(), headers={"Content-Security-Policy": _CSP})
+    return HTMLResponse(page.read_text(), headers={"Content-Security-Policy": CSP})
