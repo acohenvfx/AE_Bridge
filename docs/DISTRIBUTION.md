@@ -62,9 +62,9 @@ checked" rather than a mismatch.
 
 ## Before the first real release
 
-1. **Repo secrets** on `acohenvfx/AE_Bridge`. The six Apple ones are the same
-   values DifferenceEngine uses. `RELEASES_REPO_PAT` must grant
-   `Contents: write` on **AE_Bridge_Releases**, not DE's repo.
+1. **Repo secrets** on `acohenvfx/AE_Bridge` — see the table below. As of
+   2026-08-05 this repo has **none** set, while DifferenceEngine has all
+   eight, so a `helper-v*` tag would fail at the credentials check.
 2. **Enable the `workers.dev` route** for the `ae-bridge` Worker. It is
    disabled by default, which is why `ae-bridge.andrewcohenvfx.workers.dev`
    404s.
@@ -76,6 +76,50 @@ checked" rather than a mismatch.
    at `localhost:3010`. Pass `AEBRIDGE_AVPI=/path/to/signed.avpi`.
 5. Set `AEBRIDGE_SIGN_IDENTITY` when running `make-dmg.sh`, or the installer
    app and DMG go out unsigned.
+
+## Secrets: what is shared with DifferenceEngine and what is not
+
+GitHub secrets are **per repository**. Nothing is inherited from
+DifferenceEngine — every value below has to be set on `acohenvfx/AE_Bridge`
+even where the value itself is identical.
+
+| Secret | Same value as DE? | Why |
+| --- | --- | --- |
+| `MAC_CERT_P12_BASE64` | **Yes** | A Developer ID Application certificate is issued per *team*, not per app. One cert signs both products. |
+| `MAC_CERT_PASSWORD` | **Yes** | Password for that same `.p12`. |
+| `MAC_DEVELOPER_ID` | **Yes** | The identity string, e.g. `Developer ID Application: … (RRD4N3SXSG)`. |
+| `MAC_NOTARY_APPLE_ID` | **Yes** | Same Apple ID. |
+| `MAC_NOTARY_PASSWORD` | **Yes** | See the note below — this is the one that looks product-specific and is not. |
+| `MAC_NOTARY_TEAM_ID` | **Yes** | Same team. |
+| `RELEASES_REPO_PAT` | **NO** | Must grant `Contents: write` on **AE_Bridge_Releases**. A fine-grained PAT is repo-scoped, so DE's token will 403 here. Either mint a new one or add this repo to the existing token's access list. |
+| `CLOUDFLARE_*` | **Not needed** | DE deploys Pages from a GitHub Action. AEBridge's UI deploys through Cloudflare's own Git-connected Workers Builds, which needs no Actions secret. |
+
+**On `MAC_NOTARY_PASSWORD`.** An Apple *app-specific password* is tied to the
+**Apple ID**, not to a product — "app-specific" means "specific to the
+third-party tool you hand it to", so it can be revoked individually. It is not
+bound to a bundle identifier. `notarytool` authenticates as Apple ID + team and
+reads the bundle id from the submitted binary, so **AEBridge does not need its
+own**. Generating a separate one labelled for AEBridge is reasonable if you
+want to revoke one product's access without disturbing the other; Apple caps
+you at 25 active passwords.
+
+Set them without putting values through a terminal history or a chat window:
+
+```bash
+# prompts interactively for the value
+gh secret set MAC_NOTARY_PASSWORD --repo acohenvfx/AE_Bridge
+
+# or read from a file, for long values like the base64 cert
+gh secret set MAC_CERT_P12_BASE64 --repo acohenvfx/AE_Bridge < cert-base64.txt
+```
+
+`gh secret list --repo acohenvfx/AE_Bridge` shows names and dates only —
+GitHub never exposes stored values, so secrets cannot be copied between repos
+programmatically.
+
+The release workflow checks for the critical ones up front, so a missing secret
+fails in seconds with a named error rather than partway through a notarization
+submission.
 
 ## Hosting note
 
