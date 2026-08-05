@@ -80,10 +80,26 @@ watches for each solo and grabs it, so they never leave the timeline.
 5. **Name:** **every** pass reads `getMarkers(seq, track)` — restricted to the
    grabbed track via the GetMarkers track filter **and** a client-side track
    guard — filtered to the clip's record span, then the marker **nearest the
-   playhead**. V1's marker names the stack (`baseName`). An upper track prefers
+   playhead**. V1's marker names the stack (`baseName`) — this is the SHOT
+   identity (job/folder name), kept unsuffixed. An upper track prefers
    **its own** marker; `<base>_plNN` is only the fallback for a track with no
    marker. The user's prefix/suffix are applied to the plate FILE names at Send;
    the Avid subclips keep the raw marker name (deliberate — see Folders & UX).
+   **FIXED 2026-08-04, NOT YET VERIFIED IN AVID: V1's own PLATE name (not the
+   shot identity above) always gets `_pl01` appended if it isn't already
+   suffixed.** Reported by the user: a V1 marker that is just the bare shot
+   name (e.g. `vfx_010_0010`) previously became the V1 plate's file/subclip
+   name verbatim, with no `_plNN` — inconsistent with every upper plate, which
+   always carries one. `withPlateSuffix()` (new, `src/utils/api/edlPlan.mjs`,
+   pure/tested) appends `_pl01` unless the name already ends `_plNN` (a real
+   marker in this project's own test sequence, `testCAM_101_001_0140_pl01`,
+   already came pre-suffixed — doubling that up was the thing to avoid).
+   Applied ONLY to the plate's file/subclip name in `grabShot()`; `shot_name`
+   (→ `s.baseName`, the folder/job identity, and the base upper tracks build
+   their own `_plNN` fallback from) is untouched, so this can't cascade into
+   `..._pl01_pl02`-style doubling on upper tracks. Test: `withPlateSuffix`
+   cases in `tests/test_edl_plan.mjs`. **Not yet checked against a real Avid
+   grab.**
 
 **Stack plan:** `analyzeStack()` runs step 2 across every video track to list
 what is under the playhead, without grabbing anything.
@@ -517,6 +533,90 @@ the N-job fan-out are all confirmed working.
   range is targetable directly. `grabShot({ atTC, atFrame })` now takes an
   explicit position, defaulting to the playhead — that generalisation is what
   makes range grabbing possible at all.
+- **FIXED 2026-08-04, PARTIALLY VERIFIED IN AVID: a continuous V1 clip (no EDL
+  cut) with markers on it is now split into one shot per marker, not
+  collapsed into one.** Reported by the user: "if a V1 clip is a continuous
+  clip, with a cut point, the tool will ignore the cut point, even if there
+  are markers on clips." Confirmed in the code — `analyzeRange()`'s loop only
+  ever iterated `edls[1]` (EDL events, i.e. real cuts); markers were read
+  later, purely to *name* a shot already decided by cut boundaries, never to
+  *split* one. A continuous clip with three markers on it came back as one
+  shot, and only the marker nearest the playhead survived naming — the other
+  two were silently dropped.
+  **The rule, per the user:** a cut point — whether a real EDL cut or a marker
+  the editor placed mid-clip — defines a new shot.
+  **Fix has three parts**, because both the export step and the naming step
+  had their own copy of the "one clip = one span" assumption:
+  1. `splitClipAtMarkers()` (new, `src/utils/api/edlPlan.mjs`, pure/tested) —
+     given one EDL clip's `[cIn, cOut)` and the V1 markers inside it, returns
+     one segment per marker. No markers inside → a single segment covering
+     the whole clip, `split: false`, so an unmarked clip's shot is
+     byte-for-byte what it always was.
+  2. The export step would otherwise still have grabbed the **whole
+     underlying clip** for each sub-shot — `grabSourceHandledMob`'s step 1
+     always used `useClipBounds: true` ("the whole clip under this frame
+     position", see the CreateSubClip fact above), regardless of where within
+     the clip the target position sat. `grabShot`/`grabSourceHandledMob` now
+     accept an optional `atEndFrame`; when `analyzeRange` marks a shot
+     `split: true`, it flows through as an **explicit** CreateSubClip
+     `head_frame`/`end_frame` pair (`useClipBounds: false`) bounding the
+     export to that segment only. **Confirmed working in Avid** — the user's
+     first test log showed the correct `headFrame`/`endFrame` pair on every
+     segment (`{"headFrame":3769,"endFrame":4036}`, `{"headFrame":4036,
+     "endFrame":4690}`, etc.), each producing correctly-bounded media.
+  3. **What that same test log caught, and what "naming still works
+     unmodified" (the original, wrong assumption here) missed:** every
+     segment after the first STARTS exactly at the marker that names it, so
+     the naming search (`grabShot()`'s "nearest marker to this grab's own
+     position") searching the WHOLE original clip's span finds that same
+     marker as nearest from BOTH that segment and the one immediately before
+     it — the one before it has no marker of its own (it's the leftover
+     before the first interior marker) and, with no narrower window, fell
+     back to its neighbour's. Two different segments came back named
+     `testCAM_101_001_0130_pl01` (and separately, two more both
+     `testCAM_101_001_0150_pl01`) — a real collision, not a fixed-in-code
+     hypothetical. Fixed by narrowing the marker search to the segment's OWN
+     `[frame, atEndFrame)` when a segment has an explicit end, instead of the
+     whole clip's `target.rec_in`/`rec_out`; also dropped the existing ±2
+     frame tolerance for that case, since a segment boundary is an exact
+     marker offset (no TC round-trip involved) and the tolerance was letting
+     the boundary marker bleed into the segment on both sides of it. A
+     segment with no marker of its own now correctly falls back to no
+     marker (an auto-generated, unique-per-subclip name) rather than
+     colliding with its neighbour.
+  4. **A REGRESSION part 2 introduced, found on the second real-Avid test:**
+     the top plate of a stack came back named after V1's marker (`..._pl01`).
+     `grabShot()`'s last-ditch naming fallback reads markers off the SUBCLIP
+     (`getMarkers(sequence.mobId)`) with **no track filter and no span
+     filter**. That was harmless while every subclip spanned a whole clip —
+     but a split segment starts EXACTLY on a marker and `createRawSubclip`
+     sets `retainMarkers: true`, so the segment's subclip now retains V1's
+     marker at its own frame 0, and every upper track with no marker of its
+     own picked it up verbatim. Fixed by gating that fallback to
+     `trackNumber === 1`; an upper track with no marker of its own is
+     supposed to fall through to the `_plNN` form, which is what skipping it
+     restores. **Lesson: `retainMarkers` makes a subclip's marker set depend
+     on its bounds** — changing how bounds are chosen silently changed what
+     that unfiltered fallback returns.
+  5. **A PRE-EXISTING bug the same test surfaced (not caused by the split
+     work): a range containing a stack only reported V1 and V2.** The
+     per-shot stack lookup asked whether each upper track's clip *contains
+     the shot's FIRST frame*, which drops any plate starting partway into the
+     shot — the normal shape of a stack, where V2/V3 sit over the middle of a
+     longer V1 clip. (The old pre-split anchor, `cIn + 1`, was equally a
+     point, so this predates the marker work; splitting just moved the anchor
+     and changed which tracks fell out.) Replaced with an OVERLAP test,
+     `pickClipForSegment()` (`edlPlan.mjs`, pure/tested) — a plate belongs to
+     the shot if it has picture anywhere inside it. A clip covering the
+     segment start still wins when one exists, so the ordinary
+     single-clip-per-track case resolves exactly as before.
+  Tests: `splitClipAtMarkers` and `pickClipForSegment` cases in
+  `tests/test_edl_plan.mjs`. **Neither the naming-window fix (3), the
+  retainMarkers fallback (4), nor the overlap fix (5) has a passing real-Avid
+  run yet** — each was written after the test that exposed it. Note the
+  pattern: every one of these was caught by real Avid, not by unit tests;
+  the pure helpers are worth having but they only cover what was already
+  understood.
 - **Soloing is per TRACK, not per shot.** `doGrabTrackAcrossRange(track)` grabs
   that one track's plate for **every** shot in the range, so N shots × M tracks
   costs only **M** manual solos. This is why the manual-soloing limitation

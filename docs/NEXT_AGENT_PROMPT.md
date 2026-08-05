@@ -99,6 +99,33 @@ place (`grabShot()` in `timeline.js` derives it from bin columns that should
 have worked here) — the skip fixes the symptom, not that root cause, so it's
 still worth a look if it keeps happening.
 
+**FIXED 2026-08-04, PARTIALLY VERIFIED IN AVID: a continuous V1 clip (one EDL
+event, no cut) with markers on it now splits into one shot per marker**
+instead of collapsing into a single shot with every marker but the nearest
+silently dropped. Reported by the user directly. Three-part fix — the shot
+ENUMERATION in `analyzeRange()` (new `splitClipAtMarkers()` in `edlPlan.mjs`,
+unit-tested), the EXPORT step in `grabSourceHandledMob` (an explicit
+`atEndFrame` bound instead of always `useClipBounds` — **confirmed correct
+against a real grab's log**, every segment got the right `headFrame`/
+`endFrame`), and a NAMING bug the first real test caught that isn't in any
+unit test: segments after the first start exactly at the marker that names
+them, so the naming search used to look across the WHOLE original clip and
+two adjacent segments both resolved to the same "nearest" marker — a real
+collision (`testCAM_101_001_0130_pl01` and `testCAM_101_001_0150_pl01` each
+produced twice on the user's first test). Fixed by narrowing the naming
+search to each segment's own span. See HANDOFF.md for the full mechanism.
+**Needs one more real-Avid pass** to confirm the naming fix actually
+resolves the collision — the user's test run predates it.
+
+**FIXED 2026-08-04, ALSO NEEDS AVID VERIFICATION: V1's plate name now always
+gets `_pl01` appended if a marker doesn't already carry a `_plNN` suffix**
+(`withPlateSuffix()` in `edlPlan.mjs`, applied in `grabShot()` — see
+HANDOFF.md). Previously a bare-shot-name V1 marker like `vfx_010_0010` became
+the V1 plate's own file/subclip name with no suffix, inconsistent with every
+upper plate. Only the plate's own name changes — `shot_name`/`s.baseName`
+(the job/folder identity upper tracks build their `_plNN` fallback from) is
+untouched, so this can't double up into `_pl01_pl02` on an upper plate.
+
 **Suspect any remaining "can't be done" claim.** Three fell this session — the
 per-track fan, `DoCommand` being denied to panels (it was a missing manifest
 scope), and marks being unreadable (they're in the mob columns). Retest before
