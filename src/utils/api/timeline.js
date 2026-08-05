@@ -58,7 +58,10 @@ import {
 import {
   clipsForTrack,
   hasNumberedUpperTracks,
+  pickClipForSegment,
   preferredEdlSetting,
+  splitClipAtMarkers,
+  withPlateSuffix,
 } from '~/utils/api/edlPlan.mjs'
 import { recoverEdl } from '~/utils/api/aebridge.js'
 
@@ -248,6 +251,15 @@ export async function analyzeRange({ parseEdl }) {
   // paced per-track requests. A failed track is never silently dropped.
   const edls = await loadTrackEdls({ mobId: shot.mobId, sequenceName: shot.name, tracks: vids, parseEdl })
 
+  // V1 markers can subdivide a single continuous EDL clip (no cut) into
+  // several logical shots — previously only EDL cut points were seen, so a
+  // marked-up but uncut clip silently collapsed into one shot with every
+  // marker but the nearest-to-playhead ignored. Read once, converted to
+  // absolute frames to match the EDL's frame space (marker `offset` is
+  // sequence-relative — see the frame-space note below).
+  const v1Markers = await getMarkers(shot.mobId, v1).catch(() => [])
+  const v1MarkerFrames = v1Markers.map((m) => (m.offset || 0) + seqStartF)
+
   // A V1 clip is in range if it OVERLAPS [markIn, markOut) — a range that
   // starts mid-clip still means the editor wants that shot.
   const shots = []
@@ -255,53 +267,76 @@ export async function analyzeRange({ parseEdl }) {
     const cIn = tcToFrames(c.rec_in, fps)
     const cOut = tcToFrames(c.rec_out, fps)
     if (cOut <= inF || cIn >= outF) continue
-    // Target position, just inside the clip so clip-bounds subclipping resolves
-    // to THIS clip and not a neighbour.
-    //
-    // Two different frame spaces, and mixing them is the trap: EDL timecodes are
-    // ABSOLUTE (01:02:37:02), but CreateSubClip's `head_frame` is relative to the
-    // SEQUENCE START — Avid's own `currentFrame` confirms it (4804 for
-    // 01:03:20:04 on a sequence starting 01:00:00:00). Passing an absolute frame
-    // asks for a position far past the end and Avid answers with the misleading
-    // "Invalid add_frame_at_head: Requested frames not available."
-    // Suffixed names, not a bare `atFrame`: the first version of this mixed the
-    // two spaces and every plate stack came back empty because absolute EDL
-    // frames were compared against a sequence-relative position.
-    const atFrameAbs = Math.min(cIn + 1, cOut - 1)
-    const atFrameSeq = atFrameAbs - seqStartF
-    const stack = []
-    for (const t of vids) {
-      const hit = (edls[t.number] || []).find((x) => {
-        const xIn = tcToFrames(x.rec_in, fps)     // absolute
-        const xOut = tcToFrames(x.rec_out, fps)   // absolute
-        return xIn <= atFrameAbs && atFrameAbs < xOut
-      })
-      if (hit) {
-        stack.push({
-          track: t.number,
-          enabled: t.enabled,
-          clipName: hit.clip_name,
-          recIn: hit.rec_in,
-          recOut: hit.rec_out,
-          srcIn: hit.src_in,
-          srcOut: hit.src_out,
-        })
+    for (const seg of splitClipAtMarkers(cIn, cOut, v1MarkerFrames)) {
+      // Target position: the segment's own start. For an un-split clip this
+      // is cIn itself — inclusive per the hit-test below (xIn <= p), so it
+      // unambiguously resolves to THIS clip and not a neighbour, same as the
+      // previous cIn+1 did. For a marker-split segment it's the marker frame
+      // that starts it.
+      //
+      // Two different frame spaces, and mixing them is the trap: EDL timecodes
+      // are ABSOLUTE (01:02:37:02), but CreateSubClip's `head_frame` is
+      // relative to the SEQUENCE START — Avid's own `currentFrame` confirms it
+      // (4804 for 01:03:20:04 on a sequence starting 01:00:00:00). Passing an
+      // absolute frame asks for a position far past the end and Avid answers
+      // with the misleading "Invalid add_frame_at_head: Requested frames not
+      // available." Suffixed names, not a bare `atFrame`: the first version of
+      // this mixed the two spaces and every plate stack came back empty
+      // because absolute EDL frames were compared against a sequence-relative
+      // position.
+      const atFrameAbs = seg.start
+      const atFrameSeq = atFrameAbs - seqStartF
+      const stack = []
+      for (const t of vids) {
+        // Overlap with the whole segment, not containment of its first frame
+        // — an upper plate starting partway into the shot is the normal shape
+        // of a stack. See pickClipForSegment.
+        const picked = pickClipForSegment(
+          (edls[t.number] || []).map((x) => ({
+            clip: x,
+            in: tcToFrames(x.rec_in, fps),   // absolute
+            out: tcToFrames(x.rec_out, fps), // absolute
+          })),
+          seg.start,
+          seg.end
+        )
+        const hit = picked ? picked.clip : null
+        if (hit) {
+          stack.push({
+            track: t.number,
+            enabled: t.enabled,
+            clipName: hit.clip_name,
+            recIn: hit.rec_in,
+            recOut: hit.rec_out,
+            srcIn: hit.src_in,
+            srcOut: hit.src_out,
+          })
+        }
       }
+      shots.push({
+        atFrame: atFrameSeq,                // sequence-relative — for head_frame
+        // Only set for a marker split: the grab pipeline reads this as an
+        // explicit CreateSubClip end bound instead of useClipBounds (the
+        // whole clip), so an unmarked/uncut clip's export is byte-for-byte
+        // unchanged from before this fix.
+        atEndFrame: seg.split ? (seg.end - seqStartF) : null,
+        atTC: framesToTc(atFrameAbs, fps),  // absolute — for EDL lookup
+        clipName: c.clip_name,
+        recIn: seg.split ? framesToTc(seg.start, fps) : c.rec_in,
+        recOut: seg.split ? framesToTc(seg.end, fps) : c.rec_out,
+        stack,
+      })
     }
-    shots.push({
-      atFrame: atFrameSeq,                // sequence-relative — for head_frame
-      atTC: framesToTc(atFrameAbs, fps),  // absolute — for EDL lookup
-      clipName: c.clip_name,
-      recIn: c.rec_in,
-      recOut: c.rec_out,
-      stack,
-    })
   }
 
   logMcapiVerbose('marked range', {
     markIn: shot.markIn, markOut: shot.markOut,
     seqStartTC: shot.startTC, seqStartFrame: seqStartF,
-    shots: shots.map((s) => ({ at: s.atTC, frame: s.atFrame, clip: s.clipName, plates: s.stack.map((p) => 'V' + p.track) })),
+    v1Markers: v1MarkerFrames.length,
+    shots: shots.map((s) => ({
+      at: s.atTC, frame: s.atFrame, end: s.atEndFrame, clip: s.clipName,
+      split: s.atEndFrame != null, plates: s.stack.map((p) => 'V' + p.track),
+    })),
   })
   if (!shots.length) {
     throw new Error('No V1 clips inside ' + shot.markIn + '–' + shot.markOut + '.')
@@ -807,7 +842,7 @@ export async function analyzeStack({ parseEdl }) {
   return { shot, stack }
 }
 
-async function grabSourceHandledMob({ sequenceMobId, sequenceName = '', atTC, atFrame, parseEdl, destBinPath, handles, trackNumber = 1, targetHint = null, scratchBin = 'AEBridge_Scratch' }) {
+async function grabSourceHandledMob({ sequenceMobId, sequenceName = '', atTC, atFrame, atEndFrame = null, parseEdl, destBinPath, handles, trackNumber = 1, targetHint = null, scratchBin = 'AEBridge_Scratch' }) {
   await ensureBin(destBinPath)
   const destPath = await resolveBinPath(destBinPath)
   await ensureBin(scratchBin)
@@ -854,10 +889,22 @@ async function grabSourceHandledMob({ sequenceMobId, sequenceName = '', atTC, at
       '). head_frame must be relative to the sequence start, not an absolute timecode frame.'
     )
   }
-  logMcapiVerbose('grab step1 (isolated by enable state)', { headFrame, clip: target.clip_name })
+  if (Number.isInteger(atEndFrame) && (atEndFrame <= headFrame || (seqDur && atEndFrame > seqDur))) {
+    throw new Error(
+      'Internal: end_frame ' + atEndFrame + ' is not after head_frame ' + headFrame +
+      ' and within the sequence (0–' + (seqDur || '?') + ').'
+    )
+  }
+  // atEndFrame (a marker-split range shot — see analyzeRange) bounds this
+  // subclip to that marker-to-marker segment instead of the whole clip:
+  // useClipBounds off, explicit head/end frames. Without it, behaviour is
+  // exactly what it always was — useClipBounds picks up the whole clip under
+  // headFrame regardless of headFrame/endFrame's values.
+  const hasExplicitEnd = Number.isInteger(atEndFrame)
+  logMcapiVerbose('grab step1 (isolated by enable state)', { headFrame, endFrame: hasExplicitEnd ? atEndFrame : null, clip: target.clip_name })
   const aItems = await createRawSubclip({
-    mobId: sequenceMobId, binPath: scratchPath, useMarks: false, useClipBounds: true,
-    enabledTracksOnly: true, headFrame, endFrame: headFrame + 1,
+    mobId: sequenceMobId, binPath: scratchPath, useMarks: false, useClipBounds: !hasExplicitEnd,
+    enabledTracksOnly: true, headFrame, endFrame: hasExplicitEnd ? atEndFrame : headFrame + 1,
   })
   if (!aItems.length) throw new Error('grab step 1 made no subclip for the playhead clip')
 
@@ -1045,15 +1092,17 @@ export async function importReturn({ filePath, destBinPath, importSettingsName =
 // a track), each call requiring that track to be the only enabled video track
 // over the shot. `baseName` carries V1's marker name to the upper passes so
 // every plate in a stack shares one base.
-export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trackNumber = 1, baseName = '', atTC = '', atFrame = null, targetHint = null }) {
+export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trackNumber = 1, baseName = '', atTC = '', atFrame = null, atEndFrame = null, targetHint = null }) {
   const shot = await getCurrentShot()
   // Default to the playhead; a range grab passes the target clip's position so
   // several shots can be grabbed without the editor moving anything.
   const tc = atTC || shot.playheadTC
   const frame = Number.isInteger(atFrame) ? atFrame : shot.playheadFrame
   // Grab the clip under the playhead from its SOURCE master (handles from the
-  // source's own media, never the sequence timeline).
-  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, sequenceName: shot.name, atTC: tc, atFrame: frame, parseEdl, destBinPath, handles, trackNumber, targetHint })
+  // source's own media, never the sequence timeline). atEndFrame, when given
+  // (a marker-split range shot — see analyzeRange), bounds the export to that
+  // segment instead of the whole underlying clip.
+  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, sequenceName: shot.name, atTC: tc, atFrame: frame, atEndFrame, parseEdl, destBinPath, handles, trackNumber, targetHint })
   const sequence = r.exportMob
   const created = r.created
 
@@ -1066,16 +1115,32 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trac
     const t = r.target
     if (t) {
       const seqStartF = tcToFrames(shot.startTC || '00:00:00:00', 24)
-      const inF = tcToFrames(t.rec_in, 24) - seqStartF
-      const outF = tcToFrames(t.rec_out, 24) - seqStartF
+      // A marker-split segment (atEndFrame given — see analyzeRange) must
+      // search only ITS OWN span, not the whole underlying EDL clip's. Every
+      // segment after the first STARTS exactly at the marker that names it,
+      // so searching the whole clip finds that same marker "nearest" from
+      // BOTH that segment and the one before it — a real bug, reproduced
+      // live: two different segments both named after the marker that starts
+      // the second one, because the first segment (which has no marker of
+      // its own, sitting before the first interior marker) fell back to
+      // "nearest in the whole clip" and landed on its neighbour's marker.
+      const hasExplicitEnd = Number.isInteger(atEndFrame)
+      const inF = hasExplicitEnd ? frame : tcToFrames(t.rec_in, 24) - seqStartF
+      const outF = hasExplicitEnd ? atEndFrame : tcToFrames(t.rec_out, 24) - seqStartF
       // Restrict to markers on the grabbed track — server-side filter plus a
       // client-side guard in case the server ignores it — so each plate in a
       // stack takes its OWN track's comment, not a neighbour's.
       const wantT = r.track ? r.track.type : null
       const wantN = r.track ? r.track.number : null
       const all = await getMarkers(shot.mobId, r.track || undefined)
+      // The ±2 tolerance covers TC-string round-tripping in the whole-clip
+      // case (t.rec_in/rec_out went through tcToFrames). A segment boundary
+      // came directly from a marker's own integer offset (see analyzeRange /
+      // splitClipAtMarkers) — no rounding involved, and padding it would let
+      // that exact boundary marker match the segment on EITHER side of it.
+      const pad = hasExplicitEnd ? 0 : 2
       const within = all.filter((m) => {
-        const inSpan = (m.offset || 0) >= inF - 2 && (m.offset || 0) < outF + 2
+        const inSpan = (m.offset || 0) >= inF - pad && (m.offset || 0) < outF + pad
         const onTrack = wantN == null || m.trackNumber == null || (m.trackType === wantT && m.trackNumber === wantN)
         return inSpan && onTrack
       })
@@ -1088,18 +1153,33 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trac
       marker = markerLabel(chosen)
       logMcapiVerbose('marker for V' + trackNumber, { inF, outF, playheadFrame: phF, count: within.length, marker })
     }
-    // Fall back to any marker the subclip itself retained.
-    if (!marker) marker = markerLabel(await getMarkers(sequence.mobId).catch(() => []))
+    // Fall back to any marker the subclip itself retained — V1 ONLY.
+    // This read has no track filter and no span filter (a subclip's markers
+    // carry neither reliably), so on an UPPER track it will happily return a
+    // marker belonging to V1. That was harmless while every subclip spanned a
+    // whole clip, but a marker-split segment (see analyzeRange) starts
+    // EXACTLY on a marker, and `createRawSubclip` sets retainMarkers:true —
+    // so the segment's subclip retains V1's marker at its own frame 0 and
+    // every upper plate in the stack came back named after it. Reported live:
+    // the top plate of a stack taking V1's `..._pl01` name. An upper track
+    // with no marker of its own is supposed to fall through to the `_plNN`
+    // form, which is exactly what skipping this does.
+    if (!marker && trackNumber === 1) {
+      marker = markerLabel(await getMarkers(sequence.mobId).catch(() => []))
+    }
   } catch (e) {
     logMcapiVerbose('marker read failed', e.message)
   }
 
-  // Naming. The first pass (V1) names the whole stack from its marker. An upper
-  // track prefers its OWN marker; `_plNN` is only the fallback for a track that
-  // has no marker of its own.
+  // Naming. The first pass (V1) names the whole stack from its marker — always
+  // suffixed _pl01 (withPlateSuffix), even when the marker is just the bare
+  // shot name, so V1's own plate reads as part of the stack the same way
+  // every upper plate already does. An upper track prefers its OWN marker
+  // as-is; `_plNN` is only the fallback for a track that has no marker of
+  // its own.
   const name = baseName || marker || sequence.mobName || shot.name
   const plateName = trackNumber === 1
-    ? name
+    ? withPlateSuffix(name, 1)
     : (marker || name + '_pl' + String(trackNumber).padStart(2, '0'))
   logMcapiVerbose('plate name', { track: 'V' + trackNumber, marker: marker || null, base: name, plateName, fromMarker: !!(trackNumber !== 1 && marker) })
   for (const item of created) {

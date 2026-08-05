@@ -23,3 +23,54 @@ export function hasNumberedUpperTracks(clips) {
     return number != null && number > 1
   })
 }
+
+// Which clip on one track belongs to a shot segment spanning [segStart, segEnd)?
+// Frames in, not timecodes, so this stays pure and testable.
+//
+// This used to be point containment at the segment's FIRST frame, which
+// quietly dropped any upper-track plate that starts partway into the shot —
+// the normal shape of a stack, where V2/V3 sit over the middle of a longer V1
+// clip. Reported live as "analyzing a range containing a stack only
+// recognizes V1 and V2". OVERLAP is the right test: a plate belongs to the
+// shot if it has picture anywhere inside it.
+//
+// A clip covering the segment's start still wins when one exists, so the
+// single-clip-per-track case resolves exactly as it did before.
+export function pickClipForSegment(clips, segStart, segEnd) {
+  const overlapping = (clips || []).filter((c) => c.in < segEnd && c.out > segStart)
+  if (!overlapping.length) return null
+  return overlapping.find((c) => c.in <= segStart && segStart < c.out) || overlapping[0]
+}
+
+const PLATE_SUFFIX_RE = /_pl\d+$/i
+
+// Every plate's name should carry its position in the stack (V1 = _pl01,
+// V2 = _pl02, ...) so the files read as parts of one set even when a marker
+// is just the bare shot name (e.g. vfx_010_0010). A name that already ends
+// in _plNN — some pipelines pre-name their plates that way, and it showed up
+// as V1's own marker in a real sequence during this project's testing — is
+// left alone rather than doubled up into _pl01_pl01.
+export function withPlateSuffix(name, trackNumber) {
+  const base = String(name || '')
+  if (PLATE_SUFFIX_RE.test(base)) return base
+  return base + '_pl' + String(trackNumber).padStart(2, '0')
+}
+
+// A continuous V1 clip (one EDL event, no cut) can still carry several
+// markers the editor placed to mark separate VFX shots. analyzeRange used to
+// see only EDL cut points, so a marked-up but uncut clip came back as ONE
+// shot with every marker but the nearest-to-playhead silently ignored.
+// Split [clipIn, clipOut) at any marker frame strictly inside it — a marker
+// exactly on a boundary doesn't add a split, it's already one. No markers
+// inside -> a single segment covering the whole clip, `split: false`, so the
+// caller's existing whole-clip export path (useClipBounds) is untouched.
+export function splitClipAtMarkers(clipIn, clipOut, markerFrames) {
+  const inside = Array.from(new Set((markerFrames || []).filter((m) => m > clipIn && m < clipOut)))
+    .sort((a, b) => a - b)
+  const bounds = [clipIn, ...inside, clipOut]
+  const segments = []
+  for (let i = 0; i < bounds.length - 1; i += 1) {
+    segments.push({ start: bounds[i], end: bounds[i + 1], split: inside.length > 0 })
+  }
+  return segments
+}

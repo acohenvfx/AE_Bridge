@@ -1025,6 +1025,7 @@ export default {
             baseName: track === 1 ? '' : (sh.baseName || ''),
             atTC: sh.atTC,
             atFrame: sh.atFrame,
+            atEndFrame: sh.atEndFrame,
             targetHint,
             parseEdl: (edlPath) => api.parseEdl(edlPath).then((x) => x.clips)
           }).catch((e) => { throw new Error('shot ' + (i + 1) + ' (' + sh.atTC + '): ' + e.message) })
