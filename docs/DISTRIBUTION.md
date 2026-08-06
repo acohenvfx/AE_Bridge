@@ -62,9 +62,11 @@ checked" rather than a mismatch.
 
 ## Before the first real release
 
-1. **Repo secrets** on `acohenvfx/AE_Bridge` — see the table below. As of
-   2026-08-05 this repo has **none** set, while DifferenceEngine has all
-   eight, so a `helper-v*` tag would fail at the credentials check.
+1. ~~Repo secrets on `acohenvfx/AE_Bridge`~~ — **DONE.** All 7 were set on
+   2026-08-05/06 (`gh secret list --repo acohenvfx/AE_Bridge` confirms), and
+   they demonstrably work: `helper-v0.0.3` signed and notarized with them on
+   2026-08-06. The table below still documents which values are shared with
+   DifferenceEngine, which matters when one is rotated.
 2. ~~Enable the `workers.dev` route for the `ae-bridge` Worker~~ — **DONE,
    confirmed 2026-08-06.** `ae-bridge.andrewcohenvfx.workers.dev` now returns
    `200` and serves the real Nuxt build (`/app` → `/app/` → the panel HTML),
@@ -76,8 +78,91 @@ checked" rather than a mismatch.
    opt back out to the bundled local UI.
 3. **Ship the signed `.avpi`**, not `dist/AEBridge.avpi` — the dev build points
    at `localhost:3010`. Pass `AEBRIDGE_AVPI=/path/to/signed.avpi`.
-4. Set `AEBRIDGE_SIGN_IDENTITY` when running `make-dmg.sh`, or the installer
-   app and DMG go out unsigned.
+4. **Have working notary credentials before running `make-dmg.sh`.** Signing is
+   now the default and the identity is auto-detected, so the only thing that
+   needs arranging is the notary profile — see below.
+
+## The DMG must be notarized, not just signed
+
+**Signed-but-un-notarized is the dangerous shape.** It builds cleanly,
+`codesign --verify` passes, and it is then rejected on any machine that did not
+build it:
+
+```
+spctl --assess: rejected
+source=Unnotarized Developer ID
+```
+
+Found on 2026-08-06 on a DMG that looked finished — `make-dmg.sh` signed the
+installer app but never submitted it to Apple, unlike the helper, which
+`ci-sign-notarize-bundle.sh` has always notarized. `codesign --verify` passing
+is **not** the check that matters; it says the signature is intact, not that
+Gatekeeper will allow the thing to run. Assert with `spctl --assess`.
+
+`make-dmg.sh` now makes this unrepresentable: **signing implies notarizing**,
+and it refuses to build rather than emit a signed DMG it cannot notarize. It
+notarizes and staples the installer app *before* placing it in the image (so
+the ticket travels inside), then signs, notarizes and staples the DMG itself,
+then verifies both with `spctl` — the DMG directly and the installer app from
+the *mounted* image, as the user will actually launch it. Stapling is what
+makes it work **offline**: without a stapled ticket Gatekeeper must reach Apple
+to discover the notarization, which an edit bay may not be able to do.
+
+**Signing is the default and the identity is auto-detected** (the same approach
+as ElementalBender's `ota/sign-dmg.sh`). Producing something distributable must
+not depend on remembering a variable, so the *unsafe* path is the one you ask
+for: `AEBRIDGE_UNSIGNED=1` builds an unsigned DMG for local testing and says
+plainly it must not be distributed.
+
+```bash
+# Create once; the password never enters the environment, a script, or history.
+xcrun notarytool store-credentials ACNOTARY \
+  --apple-id <apple-developer-id> --team-id RRD4N3SXSG
+
+AEBRIDGE_AVPI=/path/to/signed.avpi bash installer/make-dmg.sh
+```
+
+Credentials, in precedence order: `AEBRIDGE_NOTARY_PROFILE` → the CI trio
+`MAC_NOTARY_APPLE_ID` + `MAC_NOTARY_PASSWORD` + `MAC_NOTARY_TEAM_ID` (the same
+variables `ci-sign-notarize-bundle.sh` uses, so a workflow that can release the
+helper can build the DMG with no new secrets) → the shared `ACNOTARY` keychain
+profile.
+
+**Why one shared profile name.** An app-specific password is tied to the
+**Apple ID, not a product**, so a single profile serves AEBridge,
+DifferenceEngine and ElementalBender. The sister projects each invented their
+own — `EB Notary`, `DE_NOTARY`, `difference-engine-notary` — which means a
+rotated password must be re-stored three times. On 2026-08-06 **all three were
+stale (HTTP 401)** while the CI secret was still valid and notarizing helper
+releases fine. Aligning them on `ACNOTARY` is a one-line change in each.
+
+**The credentials are checked before the build**, not after — `notarytool
+history` runs in the preflight, so a revoked password fails in seconds instead
+of after a full build. A 401 means the app-specific password is wrong or
+rotated, **not** that the Apple ID is unregistered; "No Keychain password item"
+means the profile was never created. An app-specific password is **not** the
+Apple ID password — `notarytool` cannot complete a 2FA challenge, so only an
+app-specific password (or an App Store Connect API key) works.
+
+**The Apple ID is `andrewrcohen@…`, NOT the `andrewcohenvfx@…` GitHub
+address.** They are different accounts and the wrong one fails
+`store-credentials` at validation — which stores nothing, so the symptom is a
+profile that simply does not exist rather than an error you can find later.
+(Left as a placeholder in the command above on purpose: this repo is public.)
+
+**VERIFIED 2026-08-06.** First fully notarized DMG built end to end:
+`dist/AEBridge-0.0.3.dmg`, containing `AE_Bridge_0.0.1.avpi` and the real
+signed `helper-v0.0.3` as the seed. Both notary submissions Accepted, both
+stapled. Checked the way an artist actually receives it — a copy marked with
+a Safari `com.apple.quarantine` attribute still reported `accepted /
+source=Notarized Developer ID` for the DMG, for the installer app on the
+mounted image, and for the seeded helper inside it.
+
+**Seed the DMG with a real released helper, not `dist/AEBridgeHelper.app` as
+left by a local build** — that one is unsigned dev debris (it was version
+`0.0.1` with `TeamIdentifier=not set` as of 2026-08-06). Download the release
+asset and unpack it to `dist/AEBridgeHelper.app` first, or the DMG ships an
+unsigned helper inside a notarized wrapper.
 
 ## Secrets: what is shared with DifferenceEngine and what is not
 
