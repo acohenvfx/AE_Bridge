@@ -216,5 +216,20 @@ Implemented but **NOT YET RUN IN AVID** — test these three first:
    `ota/AEBridgeLauncher.sh`). Worth a real install to confirm the proxy
    behaves the same inside the actual launchd-run helper, not just the
    throwaway instance this was checked against.
-5. **Cut a first real (non-test) `helper-v*` release tag** — the pipeline has
-   been proven end-to-end with test builds but no real release has shipped.
+5. ~~Cut a first real (non-test) `helper-v*` release tag~~ — **DONE 2026-08-06:
+   `helper-v0.0.3`**, published to `acohenvfx/AE_Bridge_Releases` with both
+   architectures. Note: the `on: push: tags:` trigger did not fire for this
+   tag (no run appeared after ~2 minutes of polling) — worked around with
+   `gh workflow run release-helper.yml -f version=helper-v0.0.3`
+   (`workflow_dispatch`), which built identically. Root cause of the missed
+   auto-trigger is unknown; if a future `git push origin helper-vX` doesn't
+   start a run within a minute or so, use the same dispatch workaround rather
+   than re-tagging. Independently verified (not just trusting CI): downloaded
+   the arm64 asset, checksum matched, `codesign --verify` passed,
+   `spctl --assess` said `accepted` / `source=Notarized Developer ID`,
+   `xcrun stapler validate` succeeded, and both the helper binary and the
+   embedded probe are `arm64` as expected. No real DMG install exists on this
+   dev machine yet, so the launcher's actual update-detection path
+   (`AEBridgeLauncher.sh` comparing `version.txt` against an installed
+   `helper-v0.0.1-test`) is still unverified against a live install — worth
+   doing before calling OTA helper updates fully proven.
