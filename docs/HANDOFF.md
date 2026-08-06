@@ -38,10 +38,12 @@ different-span rec_in comparison was verified turned out to rest on a case
 that never exercises the actual bug; `plateOffsets` was rewritten to use
 `head_handles` instead of cross-track `rec_in` comparison.
 
-What is NOT verified: auto-solo (parked — see the `DoCommand` fact), a real
-Avid/After Effects return through the return-validation guardrail (now the
-native AVFoundation probe, not `ffprobe`), and the 2026-08-04 marker-split /
-plate-naming fixes, which have unit tests but no passing Avid run.
+What is NOT verified: auto-solo (parked — see the `DoCommand` fact), and a
+real Avid/After Effects return through the return-validation guardrail (now
+the native AVFoundation probe, not `ffprobe`). The 2026-08-06 cuts-define-shots
+rework and the `_pl01`/`_pl02` naming rules ARE verified — user-confirmed
+against the real range test (3 shots, no duplicates, correct suffixes) on
+2026-08-06.
 
 ## The grab pipeline (as-built) — `src/utils/api/timeline.js`
 
@@ -89,21 +91,23 @@ watches for each solo and grabs it, so they never leave the timeline.
    **its own** marker; `<base>_plNN` is only the fallback for a track with no
    marker. The user's prefix/suffix are applied to the plate FILE names at Send;
    the Avid subclips keep the raw marker name (deliberate — see Folders & UX).
-   **FIXED 2026-08-04, NOT YET VERIFIED IN AVID: V1's own PLATE name (not the
-   shot identity above) always gets `_pl01` appended if it isn't already
+   **FIXED 2026-08-04, VERIFIED IN AVID 2026-08-06: V1's own PLATE name (not
+   the shot identity above) always gets `_pl01` appended if it isn't already
    suffixed.** Reported by the user: a V1 marker that is just the bare shot
    name (e.g. `vfx_010_0010`) previously became the V1 plate's file/subclip
    name verbatim, with no `_plNN` — inconsistent with every upper plate, which
-   always carries one. `withPlateSuffix()` (new, `src/utils/api/edlPlan.mjs`,
+   always carries one. `withPlateSuffix()` (`src/utils/api/edlPlan.mjs`,
    pure/tested) appends `_pl01` unless the name already ends `_plNN` (a real
    marker in this project's own test sequence, `testCAM_101_001_0140_pl01`,
    already came pre-suffixed — doubling that up was the thing to avoid).
    Applied ONLY to the plate's file/subclip name in `grabShot()`; `shot_name`
    (→ `s.baseName`, the folder/job identity, and the base upper tracks build
-   their own `_plNN` fallback from) is untouched, so this can't cascade into
-   `..._pl01_pl02`-style doubling on upper tracks. Test: `withPlateSuffix`
-   cases in `tests/test_edl_plan.mjs`. **Not yet checked against a real Avid
-   grab.**
+   their own `_plNN` fallback from) is untouched. Upper tracks use
+   `plateNameForTrack()`, which REPLACES the base's trailing `_plNN` rather
+   than appending — the first real test produced `..._pl01_pl02` before that
+   fix. Both confirmed correct (`_pl01`/`_pl02`/`_pl03`) in the 2026-08-06
+   range retest. Tests: `withPlateSuffix`/`plateNameForTrack` cases in
+   `tests/test_edl_plan.mjs`.
 
 **Stack plan:** `analyzeStack()` runs step 2 across every video track to list
 what is under the playhead, without grabbing anything.

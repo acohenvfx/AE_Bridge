@@ -99,28 +99,24 @@ place (`grabShot()` in `timeline.js` derives it from bin columns that should
 have worked here) — the skip fixes the symptom, not that root cause, so it's
 still worth a look if it keeps happening.
 
-**RESOLVED 2026-08-06: cuts define shots; markers only name them.** The
-marker-splitting feature was REMOVED — real-Avid testing showed the user's
-markers sit mid-shot as labels, so marker boundaries chopped real clips into
-half-shots that grabbed duplicate media ("2 of each clip"). Shots are one per
-V1 EDL event again, which covers the original complaint because the VFX
-toolkit edl preset reports through-edits (cuts with continuing source
-timecode) as separate events. Also recorded in HANDOFF.md as a hard-won fact:
-**CreateSubClip IGNORES explicit head_frame/end_frame spans** (asked for 267
-frames, got the full 624-frame clip, six of six times) — a mid-clip segment
-cannot be exported via this RPC, so do not rebuild marker-splitting without a
-different bounding mechanism. The naming rules survive: V1 gains `_pl01` when
-its marker lacks it, and upper-plate fallbacks REPLACE the base's trailing
-`_plNN` rather than appending (`_pl01_pl02` was reported and fixed).
+**RESOLVED AND VERIFIED IN AVID 2026-08-06: cuts define shots; markers only
+name them.** The marker-splitting feature was REMOVED — real-Avid testing
+showed the user's markers sit mid-shot as labels, so marker boundaries chopped
+real clips into half-shots that grabbed duplicate media ("2 of each clip").
+Shots are one per V1 EDL event again, which covers the original complaint
+because the VFX toolkit edl preset reports through-edits (cuts with
+continuing source timecode) as separate events. Also recorded in HANDOFF.md
+as a hard-won fact: **CreateSubClip IGNORES explicit head_frame/end_frame
+spans** (asked for 267 frames, got the full 624-frame clip, six of six times)
+— a mid-clip segment cannot be exported via this RPC, so do not rebuild
+marker-splitting without a different bounding mechanism.
 
-**FIXED 2026-08-04, ALSO NEEDS AVID VERIFICATION: V1's plate name now always
-gets `_pl01` appended if a marker doesn't already carry a `_plNN` suffix**
-(`withPlateSuffix()` in `edlPlan.mjs`, applied in `grabShot()` — see
-HANDOFF.md). Previously a bare-shot-name V1 marker like `vfx_010_0010` became
-the V1 plate's own file/subclip name with no suffix, inconsistent with every
-upper plate. Only the plate's own name changes — `shot_name`/`s.baseName`
-(the job/folder identity upper tracks build their `_plNN` fallback from) is
-untouched, so this can't double up into `_pl01_pl02` on an upper plate.
+The naming rules survive and are ALSO confirmed working in the same retest
+(3 shots, no duplicates, `_pl01`/`_pl02`/`_pl03` all correct): V1 gains
+`_pl01` when its marker lacks it (`withPlateSuffix()`), and upper-plate
+fallbacks REPLACE the base's trailing `_plNN` rather than appending
+(`plateNameForTrack()` — `_pl01_pl02` was reported and fixed before this
+retest). Both in `src/utils/api/edlPlan.mjs`.
 
 **Suspect any remaining "can't be done" claim.** Three fell this session — the
 per-track fan, `DoCommand` being denied to panels (it was a missing manifest
@@ -169,9 +165,6 @@ Summary of what exists and what it changed:
   bundle.
 
 **Likely next tasks — confirm priority with the user first:**
-0. **The marker-split fixes still have no passing Avid run** (see above). That
-   matters more than anything below, and the hosted UI and any release cut now
-   contain that unverified code.
 1. **Scratch-bin cleanup.** `AEBridge_Scratch` gains a subclip per plate per
    pass and a range batch fills it fast. No delete-mob API; needs real
    investigation. Most likely daily irritation.
@@ -180,3 +173,7 @@ Summary of what exists and what it changed:
 3. **Why `frame_count` reads 0** for some shots (see FIXED note above) — the
    validation gate no longer blocks on it, but the root cause in `grabShot()`
    is still unexplained.
+4. **A real Avid return through the native probe** — return-validation itself
+   (rate/resolution/frame-count check on the AE render) is still unverified
+   end to end; the probe's numbers were checked against ffprobe on existing
+   files, not through a live Send → render → Import round trip.
