@@ -90,7 +90,17 @@
           <div style="display:flex; align-items:baseline; justify-content:space-between; gap:10px">
             <b>{{ s.range.shots.length }} shot{{ s.range.shots.length === 1 ? '' : 's' }} in
               <span class="eb-mono">{{ s.range.markIn }}–{{ s.range.markOut }}</span></b>
-            <button class="eb-btn eb-btn--ghost eb-btn--mini" @click="s.range = null">Hide</button>
+            <span style="display:flex; align-items:center; gap:8px">
+              <label
+                v-if="rangeTracksRemaining().length"
+                class="eb-chip"
+                :class="{ 'is-on': s.autoGrabRange }"
+                title="Grab a track across every shot in the range automatically as you solo it in the Avid timeline"
+              >
+                <input v-model="s.autoGrabRange" type="checkbox" style="margin-right:6px"> Auto-grab
+              </label>
+              <button class="eb-btn eb-btn--ghost eb-btn--mini" @click="s.range = null">Hide</button>
+            </span>
           </div>
           <div class="range-shots">
             <div v-for="(sh, i) in s.range.shots" :key="sh.atTC" class="range-shot">
@@ -129,8 +139,9 @@
           <div class="eb-muted" style="font-size:11px; margin-top:8px">
             <template v-if="rangeTracksRemaining().length">
               {{ s.range.totalPlates }} plates. Solo <b>only V{{ rangeTracksRemaining()[0] }}</b>
-              in the timeline, then grab it for every shot at once — soloing is per track,
-              not per shot.
+              in the timeline{{ s.autoGrabRange ? '' : ', then grab it for every shot at once' }}
+              — soloing is per track, not per shot.
+              <template v-if="s.autoGrabRange && autoGrabRangeStatus"> {{ autoGrabRangeStatus }}</template>
             </template>
             <template v-else>
               All {{ s.range.totalPlates }} plates grabbed. Send makes one job per shot.
@@ -421,6 +432,14 @@
               title="Select all subclips in AEBridge_Scratch so you can review and delete them in Avid"
               @click="doSelectScratch"
             >{{ selectingScratch ? 'Selecting…' : 'Select scratch' }}</button>
+            <label
+              v-if="s.inAvid"
+              class="eb-chip"
+              :class="{ 'is-on': s.autoSelectScratch }"
+              title="Select scratch subclips automatically after every Send, so they're ready to review — this only selects, it never deletes. You still press Delete in Avid yourself."
+            >
+              <input v-model="s.autoSelectScratch" type="checkbox" style="margin-right:6px"> Auto-select on Send
+            </label>
             <!-- Parked experiment: driving the track selectors via DoCommand.
                  Avid accepts the command but the enable state never moves. Kept
                  here (not in the grab flow) so it can be retested cheaply. -->
@@ -471,7 +490,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-08-06.3 · cuts define shots'
+const UI_BUILD = '2026-08-06.4 · range auto-solo + scratch auto-select'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -493,7 +512,7 @@ function sig(list) {
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', probing: false, selectingScratch: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0 }
+    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', autoGrabRangeStatus: '', probing: false, selectingScratch: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0 }
   },
   computed: {
     logText() {
@@ -663,7 +682,9 @@ export default {
     's.pollPaused'(v) { this.savePref('pollPaused', v ? '1' : '0'); if (!v) this.wakePolling() },
     // Turning auto-grab on must restore a responsive poll, or it could sit in
     // the slow lane and take seconds to notice a soloed track.
-    's.autoGrab'(v) { this.savePref('autoGrab', v ? '1' : '0'); if (v) this.wakePolling() }
+    's.autoGrab'(v) { this.savePref('autoGrab', v ? '1' : '0'); if (v) this.wakePolling() },
+    's.autoGrabRange'(v) { this.savePref('autoGrabRange', v ? '1' : '0'); if (v) this.wakePolling() },
+    's.autoSelectScratch'(v) { this.savePref('autoSelectScratch', v ? '1' : '0') }
   },
   methods: {
     savePref(k, v) {
@@ -683,6 +704,8 @@ export default {
         if (g('logOpen.v2') != null) this.s.logOpen = g('logOpen.v2') === '1'
         if (g('settingsOpen') != null) this.s.settingsOpen = g('settingsOpen') === '1'
         if (g('autoGrab') != null) this.s.autoGrab = g('autoGrab') === '1'
+        if (g('autoGrabRange') != null) this.s.autoGrabRange = g('autoGrabRange') === '1'
+        if (g('autoSelectScratch') != null) this.s.autoSelectScratch = g('autoSelectScratch') === '1'
         if (g('pollPaused') != null) this.s.pollPaused = g('pollPaused') === '1'
       } catch (e) {}
     },
@@ -736,7 +759,7 @@ export default {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
       if (this.grabbingAll) return // don't compete with the track-command sequence
       // Auto-grab needs a responsive poll; so does an in-flight operation.
-      const busy = this.s.autoGrab || this.s.grabbingTrack !== null || this.s.sending
+      const busy = this.s.autoGrab || this.s.autoGrabRange || this.s.grabbingTrack !== null || this.s.sending
       if (!busy && this._idleTicks >= IDLE_TICKS_BEFORE_SLOW) {
         this._slowSkip = (this._slowSkip || 0) + 1
         if (this._slowSkip < Math.round(POLL_SLOW_MS / POLL_FAST_MS)) return
@@ -771,6 +794,7 @@ export default {
         this._readInFlight = false
       }
       await this.maybeAutoGrab()
+      await this.maybeAutoGrabRange()
     },
     // Does this panel get to drive Avid commands? Answers whether the manual
     // track toggling can be automated away. Everything lands in the log.
@@ -806,6 +830,24 @@ export default {
         this.s.message = 'Could not select scratch subclips: ' + e.message
       } finally {
         this.selectingScratch = false
+      }
+    },
+    // Best-effort scratch select, called right after a successful Send. MCAPI
+    // has no delete-mob RPC — this can never delete anything, only select, so
+    // the human still presses Delete in Avid themselves (see autoSelectScratch
+    // in toolState.js for why an unattended delete was deliberately not
+    // built). MUST NOT throw: a send already succeeded and its own message is
+    // on screen, so a scratch-select hiccup is appended, never substituted.
+    async selectScratchAfterSend() {
+      if (!this.s.autoSelectScratch || !this.s.inAvid) return
+      try {
+        const r = await tl.selectScratchSubclips()
+        if (r.count) {
+          this.s.message += ' · Selected ' + r.count + ' scratch subclip' +
+            (r.count === 1 ? '' : 's') + ' — press Delete in Avid to clear them.'
+        }
+      } catch (e) {
+        logMcapiVerbose('auto scratch-select failed (non-fatal)', e.message)
       }
     },
     // --- plate stack ---
@@ -847,6 +889,55 @@ export default {
       }
       this.autoGrabStatus = ''
       await this.doGrab(solo)
+    },
+    // Range analog of maybeAutoGrab: same watch-and-react pattern, but a solo
+    // triggers ONE track grabbed across EVERY shot in the range
+    // (doGrabTrackAcrossRange) instead of one shot's plate. Deliberately
+    // requires the LOWEST remaining track — the same one the manual button
+    // already offers — rather than accepting whichever track got soloed:
+    // doGrabTrackAcrossRange degrades gracefully if V1 hasn't gone first for a
+    // shot yet (it falls back to that track's own marker instead of the
+    // shot's real name), but there is no reason to invite that when the
+    // ordering the UI already advertises is one solo away.
+    async maybeAutoGrabRange() {
+      if (!this.s.autoGrabRange || !this.s.inAvid) return
+      if (!this.s.range || !this.s.range.shots.length) return
+      // s.stack (single-shot Analyze) and s.range (Analyze range) are NOT
+      // mutually exclusive — analyzing one never clears the other. If both
+      // are populated and both auto-grab toggles are on, a solo matching both
+      // plans' next track would otherwise fire the single-shot grab AND the
+      // whole-range grab from one solo. The single-shot flow already ran this
+      // tick (maybeAutoGrab, called first in readShot); defer to it.
+      if (this.s.stack.length) return
+      // Never race a grab/send/analyze already in flight — including the
+      // single-shot stack's own grab, since both watch the same enable state.
+      if (this.s.grabbingTrack !== null || this.s.sending || this.s.rangeAnalyzing) return
+      if (!this.s.shot || !this.s.shot.mobId) return
+      const remaining = this.rangeTracksRemaining()
+      if (!remaining.length) { this.autoGrabRangeStatus = ''; return }
+      const next = remaining[0]
+      let tracks
+      try {
+        tracks = await tl.getMobTrackInfo(this.s.shot.mobId)
+      } catch (e) {
+        return
+      }
+      // Only tracks the range still needs are relevant — anything else
+      // carries no picture any pending shot is waiting on.
+      const enabled = tl.enabledVideoTracks(tracks).filter((t) => remaining.includes(t.number)).map((t) => t.number)
+      if (enabled.length !== 1) {
+        this.autoGrabRangeStatus = enabled.length
+          ? 'Waiting — V' + enabled.join(', V') + ' enabled; solo exactly one.'
+          : 'Waiting — no needed track enabled.'
+        return
+      }
+      const solo = enabled[0]
+      if (solo !== next) {
+        this.autoGrabRangeStatus = 'Solo V' + next + ' next, not V' + solo + ' — grabbed in order so each shot\'s V1 names it first.'
+        return
+      }
+      this.autoGrabRangeStatus = ''
+      await this.doGrabTrackAcrossRange(solo)
     },
     isGrabbed(track) {
       return this.s.grabbed.some((g) => g.track === track)
@@ -1291,6 +1382,7 @@ export default {
         }
         this.s.message = 'Sent ' + sent + ' job' + (sent === 1 ? '' : 's') + ' from the marked range.'
         this.s.range = null
+        await this.selectScratchAfterSend()
         await this.refreshJobs()
       } catch (e) {
         this.s.message = 'Range send stopped after ' + sent + ' — ' + e.message
@@ -1390,6 +1482,7 @@ export default {
           })
         }
         this.s.message = 'Sent — ' + job.job_id + ' (' + this.stateLabel(job.state) + ')'
+        await this.selectScratchAfterSend()
         // Clear the collected stack so the next shot starts clean (the plates
         // are now the job's; re-sending them would duplicate the work).
         if (this.s.inAvid) this.resetStack()

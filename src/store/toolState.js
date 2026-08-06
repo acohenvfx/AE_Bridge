@@ -45,6 +45,23 @@ export const aebridge = Vue.observable({
   // HANDOFF), so soloing is manual — and watching for it is strictly better
   // than making the user come back to the panel between each track.
   autoGrab: true,
+  // Same idea, for the range flow: watch the enable state and grab a track
+  // ACROSS EVERY SHOT the moment it's soloed, instead of requiring the
+  // "Grab V<n> for all shots" button each time. ON by default for the same
+  // reason as autoGrab — the panel still cannot drive Avid's track selectors,
+  // and a range multiplies the number of manual round trips a batch would
+  // otherwise cost.
+  autoGrabRange: true,
+  // MCAPI has no delete-mob RPC, so a subclip can never be removed
+  // programmatically — the only lever is selecting AEBridge_Scratch's
+  // subclips (selectScratchSubclips) so a human can press Delete themselves.
+  // This runs that select automatically right after a successful Send, so
+  // the clips a shot just finished with are already highlighted in the bin
+  // instead of requiring a trip to Diagnostics -> Select scratch. It NEVER
+  // deletes anything itself — see HANDOFF for why an unattended delete was
+  // deliberately not built (the only mechanism available, DoCommand, already
+  // proved unreliable for track-enable in this exact codebase).
+  autoSelectScratch: true,
   // Open by default while the round trip is still being debugged — the log is
   // how Avid-side problems get diagnosed, and a collapsed one costs a round
   // trip every time something fails. The choice is still remembered once the
