@@ -421,13 +421,6 @@
             <button
               v-if="s.inAvid"
               class="eb-btn eb-btn--ghost eb-btn--mini"
-              :disabled="probing"
-              title="Test whether this panel may drive Avid commands (needs the avid.mediacomposer.command scope)"
-              @click="doProbeCommands"
-            >{{ probing ? 'Probing…' : 'Probe commands' }}</button>
-            <button
-              v-if="s.inAvid"
-              class="eb-btn eb-btn--ghost eb-btn--mini"
               :disabled="selectingScratch"
               title="Select all subclips in AEBridge_Scratch so you can review and delete them in Avid"
               @click="doSelectScratch"
@@ -490,7 +483,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-08-06.4 · range auto-solo + scratch auto-select'
+const UI_BUILD = '2026-08-06.5 · remove Probe commands button'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -512,7 +505,7 @@ function sig(list) {
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', autoGrabRangeStatus: '', probing: false, selectingScratch: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0 }
+    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', autoGrabRangeStatus: '', selectingScratch: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0 }
   },
   computed: {
     logText() {
@@ -795,25 +788,6 @@ export default {
       }
       await this.maybeAutoGrab()
       await this.maybeAutoGrabRange()
-    },
-    // Does this panel get to drive Avid commands? Answers whether the manual
-    // track toggling can be automated away. Everything lands in the log.
-    async doProbeCommands() {
-      this.probing = true
-      this.s.message = 'Probing Avid commands…'
-      try {
-        const r = await tl.probeCommands()
-        this.s.message = 'Commands available: ' + r.commands.length +
-          ' (' + r.trackRelated.length + ' track-related, ' +
-          r.cleanupRelated.length + ' cleanup candidates) — see the Log.'
-      } catch (e) {
-        this.s.message = 'Command probe failed: ' + e.message +
-          (/code=7/.test(e.message)
-            ? ' — still denied even with the command scope declared. Confirm the rebuilt .avpi is installed and Media Composer was restarted.'
-            : '')
-      } finally {
-        this.probing = false
-      }
     },
     async doSelectScratch() {
       this.selectingScratch = true
