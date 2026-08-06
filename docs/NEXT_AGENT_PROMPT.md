@@ -131,7 +131,51 @@ per-track fan, `DoCommand` being denied to panels (it was a missing manifest
 scope), and marks being unreadable (they're in the mob columns). Retest before
 designing around a limitation.
 
+**There is now a full distribution pipeline — read `docs/DISTRIBUTION.md`
+before touching any of it.** Built 2026-08-05, modelled on DifferenceEngine's.
+Summary of what exists and what it changed:
+
+- **The panel UI can update over the air** without re-signing the `.avpi`. The
+  helper proxies a hosted build (`service/routers/ui_proxy.py`) onto
+  `localhost:8010`, because the manifest is SIGNED — `url` and `allowedDomains`
+  live inside it. **It is OFF by default** (`AEBRIDGE_UI_ORIGIN` unset), so the
+  helper serves the bundled `dist/html` exactly as before.
+- **Point it at the direct `workers.dev` origin, never the custom domain.**
+  `aebridge.andrewcoheneditor.com` serves Cloudflare's `challenge-platform`
+  script, which Avid's WebView cannot complete. DE documents the same trap.
+  **The workers.dev route is currently DISABLED in the dashboard**, so that
+  hostname 404s until someone enables it.
+- **AEBridge's hosted UI is a Worker with a static Assets binding, not a Pages
+  project** (that is DE). Hence `wrangler.jsonc` here, and Git-connected
+  Cloudflare Workers Builds rather than a GitHub Action.
+- **ffprobe is gone**, replaced by `native/aebridge-probe.swift` (AVFoundation).
+  Bundling FFmpeg meant GPL + dylib-linked + single-arch. See DISTRIBUTION.md
+  for the edit-list trap that makes stored-sample counting wrong.
+- **Helper releases:** tag `helper-v*` → `.github/workflows/release-helper.yml`
+  builds, signs and notarizes both arches into `acohenvfx/AE_Bridge_Releases`.
+  All 7 repo secrets are set. `ota/AEBridgeLauncher.sh` verifies SHA-256 **and**
+  Developer ID Team ID before installing anything.
+- **DMG:** `installer/make-dmg.sh` + `installer/install-main.sh`. Installs the
+  helper, launcher, launchd job and the `.avpi` (one admin prompt, for
+  `/Library` only).
+
+**Two lessons from that work worth not relearning:**
+
+- **Run the frozen bundle, don't just build it.** `/healthz` 404'd in the
+  PyInstaller app because a Starlette `Mount` at `/` was registered before the
+  route, and a Mount at `/` matches everything. It only reproduces once
+  `dist/html` exists — a release install, never dev — so it survived to the
+  first frozen build. The installer polls `/healthz`, so every successful
+  install would have reported failure.
+- **PyInstaller thins bundled Mach-O binaries to the target arch.** A CI check
+  demanding a universal probe inside the bundle failed the first release for no
+  reason. Each arch ships its own asset; the probe only needs to match its own
+  bundle.
+
 **Likely next tasks — confirm priority with the user first:**
+0. **The marker-split fixes still have no passing Avid run** (see above). That
+   matters more than anything below, and the hosted UI and any release cut now
+   contain that unverified code.
 1. **Scratch-bin cleanup.** `AEBridge_Scratch` gains a subclip per plate per
    pass and a range batch fills it fast. No delete-mob API; needs real
    investigation. Most likely daily irritation.

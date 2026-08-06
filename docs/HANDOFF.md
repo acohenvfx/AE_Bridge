@@ -14,8 +14,10 @@ architecture but is its **own** product (own helper port, no ElementalEngine).
 - Repo: this folder (`AE_Bridge`), git remote `acohenvfx/AE_Bridge`.
 - Stack: **Nuxt 2 / Vue 2** panel (Node 16, Yarn) + **Python FastAPI** helper.
 - Read next: `docs/AEBRIDGE_DESIGN.md` (route contract + as-built),
-  `docs/BUILD_AND_INSTALL.md` (run/build), `docs/PHASE_MULTIPLATE.md` (future
-  phase). The `avid-panel-dev` skill covers the EB stack conventions.
+  `docs/BUILD_AND_INSTALL.md` (run/build), `docs/DISTRIBUTION.md` (how it
+  reaches an artist: hosted-UI proxy, signed/notarized helper releases, the
+  DMG), `docs/PHASE_MULTIPLATE.md` (future phase). The `avid-panel-dev` skill
+  covers the EB stack conventions.
 
 ## Status: the FULL grid works end to end (verified in Avid 2026-07-29)
 
@@ -36,8 +38,10 @@ different-span rec_in comparison was verified turned out to rest on a case
 that never exercises the actual bug; `plateOffsets` was rewritten to use
 `head_handles` instead of cross-track `rec_in` comparison.
 
-What is NOT verified: auto-solo (parked — see the `DoCommand` fact), and a
-real Avid/After Effects return through the new `ffprobe` guardrail.
+What is NOT verified: auto-solo (parked — see the `DoCommand` fact), a real
+Avid/After Effects return through the return-validation guardrail (now the
+native AVFoundation probe, not `ffprobe`), and the 2026-08-04 marker-split /
+plate-naming fixes, which have unit tests but no passing Avid run.
 
 ## The grab pipeline (as-built) — `src/utils/api/timeline.js`
 
@@ -759,9 +763,15 @@ disagreed in two places here, and the markup was the better guide.
   selects all scratch subclips in one safe pass; review the count, then press
   Delete in Avid. Automatic deletion remains intentionally unimplemented until
   a stable, context-safe Avid command is verified.
-- **Return-side validation** now probes the completed render with local
-  `ffprobe` for rate, resolution, and frame count before the panel imports it;
-  mismatches stop the import with a useful detail string.
+- **Return-side validation** probes the completed render for rate, resolution
+  and frame count before the panel imports it; mismatches stop the import with
+  a useful detail string. **No longer ffprobe** — since 2026-08-05 it uses
+  `native/aebridge-probe.swift` (AVFoundation), bundled in the helper, with
+  ffprobe kept only as a fallback where it happens to exist. Two things to
+  know: an uncaptured expected frame count (0) is SKIPPED rather than failed
+  (it used to block Import forever), and frame counts come from the track's
+  presented duration, not stored samples, because a QuickTime edit list can
+  present fewer frames than the container holds. See `docs/DISTRIBUTION.md`.
 - **Plan-preview UX (4c):** editable per-plate names before Send.
 - **Duplicate clips after a re-render.** Importing a re-rendered version adds a
   second clip to the bin beside the first (correct — different media), but Avid
