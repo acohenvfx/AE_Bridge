@@ -27,7 +27,7 @@ export function setVerboseMcapiLoggingEnabled(enabled) {
 // In-memory ring buffer so logs are visible in the panel (Avid's WebView has no
 // reachable console). Always captures; console output is gated by the verbose flag.
 const _logBuffer = []
-const _LOG_CAP = 300
+const _LOG_CAP = 900
 
 function _fmt(detail) {
   if (detail === undefined || detail === '') return ''
@@ -35,9 +35,30 @@ function _fmt(detail) {
   try { return JSON.stringify(detail) } catch (_e) { return String(detail) }
 }
 
+// How far back _push looks for an identical entry to collapse into. One shot
+// poll tick emits ~6 lines (getViewerMobs / getOpenProjectInfo / mob columns,
+// requests and results), so this comfortably spans a tick.
+const _REPEAT_WINDOW = 12
+
 function _push(kind, label, detail) {
   const t = new Date().toLocaleTimeString()
-  _logBuffer.push({ t, kind, label, detail: _fmt(detail) })
+  const d = _fmt(detail)
+  // Collapse repeats. The shot poll logs the SAME viewer-mobs/columns payload
+  // every ~2s, which turned the buffer over in about two minutes and evicted
+  // the lines that matter (a grab's `plate name` / `marked range`) before
+  // anyone could hit Copy — exactly what stalled a live diagnosis on
+  // 2026-08-06. An identical entry within the window just bumps a ×count and
+  // refreshes the timestamp; anything that CHANGES (playhead moved, real
+  // operation) still logs a new line.
+  for (let i = _logBuffer.length - 1, seen = 0; i >= 0 && seen < _REPEAT_WINDOW; i -= 1, seen += 1) {
+    const e = _logBuffer[i]
+    if (e.kind === kind && e.label === label && e.detail === d) {
+      e.n = (e.n || 1) + 1
+      e.t = t
+      return
+    }
+  }
+  _logBuffer.push({ t, kind, label, detail: d })
   if (_logBuffer.length > _LOG_CAP) _logBuffer.shift()
 }
 
