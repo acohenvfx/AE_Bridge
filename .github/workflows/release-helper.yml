@@ -90,16 +90,25 @@ jobs:
             exit 1
           fi
 
-      # The native probe must cover BOTH architectures regardless of which
-      # runner built the helper — it is embedded as-is.
-      - name: Verify probe is universal
+      # The embedded probe must match THIS bundle's architecture.
+      #
+      # Not universal: build-probe.sh produces a universal2 binary, but
+      # PyInstaller thins bundled Mach-O files to the target arch (the same
+      # build log shows it doing "Converting EXE to target arch"). That is
+      # correct — the matrix ships a separate asset per architecture and the
+      # launcher downloads the matching one, so an arm64 helper only ever
+      # needs an arm64 probe. Requiring universality here failed the build for
+      # no good reason.
+      - name: Verify the embedded probe matches the bundle architecture
         run: |
-          PROBE=dist/AEBridgeHelper.app/Contents/Frameworks/aebridge-probe
-          [ -f "$PROBE" ] || PROBE=$(find dist/AEBridgeHelper.app -name aebridge-probe -type f | head -1)
+          PROBE=$(find dist/AEBridgeHelper.app -name aebridge-probe -type f | head -1)
+          [ -n "$PROBE" ] || { echo "::error::no aebridge-probe embedded in the bundle"; exit 1; }
           echo "probe: $PROBE"
           lipo -info "$PROBE"
-          lipo -archs "$PROBE" | grep -q arm64
-          lipo -archs "$PROBE" | grep -q x86_64
+          if ! lipo -archs "$PROBE" | tr ' ' '\n' | grep -qx "${{ matrix.arch }}"; then
+            echo "::error::probe lacks ${{ matrix.arch }}; the helper could not validate returns"
+            exit 1
+          fi
 
       - name: Sign, notarize and stage the asset
         env:
