@@ -471,7 +471,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-08-06.2 · plate suffix replace'
+const UI_BUILD = '2026-08-06.3 · cuts define shots'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -1026,7 +1026,6 @@ export default {
             baseName: track === 1 ? '' : (sh.baseName || ''),
             atTC: sh.atTC,
             atFrame: sh.atFrame,
-            atEndFrame: sh.atEndFrame,
             targetHint,
             parseEdl: (edlPath) => api.parseEdl(edlPath).then((x) => x.clips)
           }).catch((e) => { throw new Error('shot ' + (i + 1) + ' (' + sh.atTC + '): ' + e.message) })

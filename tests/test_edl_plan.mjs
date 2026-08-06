@@ -7,7 +7,6 @@ import {
   pickClipForSegment,
   plateNameForTrack,
   preferredEdlSetting,
-  splitClipAtMarkers,
   withPlateSuffix,
 } from '../src/utils/api/edlPlan.mjs'
 
@@ -28,33 +27,6 @@ assert.deepEqual(clipsForTrack(clips, { number: 2 }).map((clip) => clip.clip_nam
 assert.deepEqual(clipsForTrack(clips, 5).map((clip) => clip.clip_name), ['foreground'])
 assert.equal(hasNumberedUpperTracks(clips), true)
 assert.equal(hasNumberedUpperTracks([{ track: 'V' }]), false)
-
-// A continuous, uncut V1 clip with markers on it (the 2026-08-04 report:
-// "the tool ignores the cut point even if there are markers on clips") must
-// split into one segment per marker, not stay one shot.
-{
-  const segs = splitClipAtMarkers(1000, 2000, [1300, 1700])
-  assert.deepEqual(segs, [
-    { start: 1000, end: 1300, split: true },
-    { start: 1300, end: 1700, split: true },
-    { start: 1700, end: 2000, split: true },
-  ])
-}
-
-// No markers inside the clip -> a single whole-clip segment, split: false, so
-// the grab pipeline's existing useClipBounds (whole clip) path is untouched.
-assert.deepEqual(splitClipAtMarkers(1000, 2000, []), [
-  { start: 1000, end: 2000, split: false },
-])
-assert.deepEqual(splitClipAtMarkers(1000, 2000, [999, 2000, 2500]), [
-  { start: 1000, end: 2000, split: false },
-]) // markers exactly on a boundary, or outside the clip entirely, don't split it
-
-// A marker exactly on an interior boundary already IS one; duplicates collapse.
-assert.deepEqual(splitClipAtMarkers(1000, 2000, [1500, 1500]), [
-  { start: 1000, end: 1500, split: true },
-  { start: 1500, end: 2000, split: true },
-])
 
 // An upper-track plate that starts partway INTO the shot still belongs to it
 // (2026-08-04 report: "analyzing a range containing a stack, only V1 and V2

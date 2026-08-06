@@ -66,21 +66,3 @@ export function plateNameForTrack(base, trackNumber) {
   return stem + '_pl' + String(trackNumber).padStart(2, '0')
 }
 
-// A continuous V1 clip (one EDL event, no cut) can still carry several
-// markers the editor placed to mark separate VFX shots. analyzeRange used to
-// see only EDL cut points, so a marked-up but uncut clip came back as ONE
-// shot with every marker but the nearest-to-playhead silently ignored.
-// Split [clipIn, clipOut) at any marker frame strictly inside it — a marker
-// exactly on a boundary doesn't add a split, it's already one. No markers
-// inside -> a single segment covering the whole clip, `split: false`, so the
-// caller's existing whole-clip export path (useClipBounds) is untouched.
-export function splitClipAtMarkers(clipIn, clipOut, markerFrames) {
-  const inside = Array.from(new Set((markerFrames || []).filter((m) => m > clipIn && m < clipOut)))
-    .sort((a, b) => a - b)
-  const bounds = [clipIn, ...inside, clipOut]
-  const segments = []
-  for (let i = 0; i < bounds.length - 1; i += 1) {
-    segments.push({ start: bounds[i], end: bounds[i + 1], split: inside.length > 0 })
-  }
-  return segments
-}
