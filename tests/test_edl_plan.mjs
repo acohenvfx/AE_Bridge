@@ -5,6 +5,7 @@ import {
   hasNumberedUpperTracks,
   normalizedVideoTrack,
   pickClipForSegment,
+  plateNameForTrack,
   preferredEdlSetting,
   splitClipAtMarkers,
   withPlateSuffix,
@@ -92,5 +93,15 @@ assert.equal(withPlateSuffix('vfx_010_0010', 2), 'vfx_010_0010_pl02')
 assert.equal(withPlateSuffix('testCAM_101_001_0140_pl01', 1), 'testCAM_101_001_0140_pl01')
 assert.equal(withPlateSuffix('vfx_010_0010_PL03', 1), 'vfx_010_0010_PL03')
 assert.equal(withPlateSuffix('', 1), '_pl01')
+
+// An upper plate's fallback name REPLACES the base's trailing _plNN with its
+// own (2026-08-06 report: V2 came out `<shot>_pl01_pl02` because the V1
+// marker comment already carried _pl01 and the suffix was appended blindly).
+assert.equal(plateNameForTrack('testCAM_101_001_0140_pl01', 2), 'testCAM_101_001_0140_pl02')
+assert.equal(plateNameForTrack('testCAM_101_001_0140_pl01', 3), 'testCAM_101_001_0140_pl03')
+// A bare base (no suffix) still just gains the track's own.
+assert.equal(plateNameForTrack('vfx_010_0010', 2), 'vfx_010_0010_pl02')
+// Case-insensitive strip, consistent with withPlateSuffix's detection.
+assert.equal(plateNameForTrack('shot_PL01', 2), 'shot_pl02')
 
 console.log('EDL PLAN TESTS PASSED')

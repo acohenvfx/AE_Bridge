@@ -56,6 +56,16 @@ export function withPlateSuffix(name, trackNumber) {
   return base + '_pl' + String(trackNumber).padStart(2, '0')
 }
 
+// Upper-track fallback name: the STEM of the base plus this track's own
+// suffix. The base is V1's name and routinely already ends in _pl01 — the
+// user's own marker convention writes it into the comment — and appending
+// produced `<shot>_pl01_pl02` on V2 (reported live 2026-08-06). A plate
+// carries exactly one _plNN: its own.
+export function plateNameForTrack(base, trackNumber) {
+  const stem = String(base || '').replace(PLATE_SUFFIX_RE, '')
+  return stem + '_pl' + String(trackNumber).padStart(2, '0')
+}
+
 // A continuous V1 clip (one EDL event, no cut) can still carry several
 // markers the editor placed to mark separate VFX shots. analyzeRange used to
 // see only EDL cut points, so a marked-up but uncut clip came back as ONE

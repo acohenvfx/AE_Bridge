@@ -471,7 +471,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-08-06.1 · log dedupe + marker-split'
+const UI_BUILD = '2026-08-06.2 · plate suffix replace'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.

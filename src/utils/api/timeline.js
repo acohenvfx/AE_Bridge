@@ -59,6 +59,7 @@ import {
   clipsForTrack,
   hasNumberedUpperTracks,
   pickClipForSegment,
+  plateNameForTrack,
   preferredEdlSetting,
   splitClipAtMarkers,
   withPlateSuffix,
@@ -1178,9 +1179,12 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trac
   // as-is; `_plNN` is only the fallback for a track that has no marker of
   // its own.
   const name = baseName || marker || sequence.mobName || shot.name
+  // Upper fallback REPLACES the base's trailing _plNN rather than appending —
+  // V1 marker comments routinely carry _pl01 already, and appending produced
+  // `<shot>_pl01_pl02`. A plate carries exactly one _plNN: its own.
   const plateName = trackNumber === 1
     ? withPlateSuffix(name, 1)
-    : (marker || name + '_pl' + String(trackNumber).padStart(2, '0'))
+    : (marker || plateNameForTrack(name, trackNumber))
   logMcapiVerbose('plate name', { track: 'V' + trackNumber, marker: marker || null, base: name, plateName, fromMarker: !!(trackNumber !== 1 && marker) })
   for (const item of created) {
     await renameMob(item.mobId, plateName).catch((e) => logMcapiVerbose('rename failed', { id: item.mobId, err: e.message }))
