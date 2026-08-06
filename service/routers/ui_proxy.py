@@ -22,13 +22,16 @@ Cloudflare's browser verification. `aebridge.andrewcoheneditor.com` injects
 complete (verified 2026-08-05 by fetching it) — the same trap DifferenceEngine
 records for its own custom domain. Use the direct `*.workers.dev` hostname
 instead. AEBridge is a Worker (with a static Assets binding), not a Pages
-project, so its direct hostname is `ae-bridge.<subdomain>.workers.dev` and
-**the workers.dev route must be enabled in the Cloudflare dashboard** — it is
-disabled by default, which makes the hostname 404.
+project, so its direct hostname is `ae-bridge.<subdomain>.workers.dev`. The
+workers.dev route was disabled by default (404s) until confirmed live and
+serving the current Git-connected build 2026-08-06 — `ota/AEBridgeLauncher.sh`
+now defaults `AEBRIDGE_UI_ORIGIN` to this hostname.
 
-**OFF BY DEFAULT.** With `AEBRIDGE_UI_ORIGIN` unset the helper serves the local
-`dist/html` build exactly as it always has (see `ui.py`), so nothing about a
-working install changes until someone opts in.
+**This module's own default is OFF.** With `AEBRIDGE_UI_ORIGIN` unset — e.g.
+running `service.app` directly, outside the launcher — the helper serves the
+local `dist/html` build exactly as it always has (see `ui.py`).
+`ota/AEBridgeLauncher.sh` is what turns it ON for a real install, by exporting
+`AEBRIDGE_UI_ORIGIN` itself before exec'ing the helper.
 """
 from __future__ import annotations
 

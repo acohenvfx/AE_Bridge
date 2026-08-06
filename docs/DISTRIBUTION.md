@@ -65,16 +65,18 @@ checked" rather than a mismatch.
 1. **Repo secrets** on `acohenvfx/AE_Bridge` — see the table below. As of
    2026-08-05 this repo has **none** set, while DifferenceEngine has all
    eight, so a `helper-v*` tag would fail at the credentials check.
-2. **Enable the `workers.dev` route** for the `ae-bridge` Worker. It is
-   disabled by default, which is why `ae-bridge.andrewcohenvfx.workers.dev`
-   404s.
-3. **Then** set `AEBRIDGE_UI_ORIGIN` in the launcher to that workers.dev
-   origin. **Not** the custom domain: `aebridge.andrewcoheneditor.com` serves
-   Cloudflare's `challenge-platform` script, which Avid's WebView cannot
-   complete. DifferenceEngine records the same rule for its own custom domain.
-4. **Ship the signed `.avpi`**, not `dist/AEBridge.avpi` — the dev build points
+2. ~~Enable the `workers.dev` route for the `ae-bridge` Worker~~ — **DONE,
+   confirmed 2026-08-06.** `ae-bridge.andrewcohenvfx.workers.dev` now returns
+   `200` and serves the real Nuxt build (`/app` → `/app/` → the panel HTML),
+   verified against `wrangler deployments list --name ae-bridge`'s latest
+   entry, not a stale cache. `ota/AEBridgeLauncher.sh` now defaults
+   `AEBRIDGE_UI_ORIGIN` to this origin (was previously left empty with a TODO
+   comment) — proxying through it was verified end-to-end on a throwaway
+   local helper instance the same day. Set `AEBRIDGE_UI_ORIGIN=` (empty) to
+   opt back out to the bundled local UI.
+3. **Ship the signed `.avpi`**, not `dist/AEBridge.avpi` — the dev build points
    at `localhost:3010`. Pass `AEBRIDGE_AVPI=/path/to/signed.avpi`.
-5. Set `AEBRIDGE_SIGN_IDENTITY` when running `make-dmg.sh`, or the installer
+4. Set `AEBRIDGE_SIGN_IDENTITY` when running `make-dmg.sh`, or the installer
    app and DMG go out unsigned.
 
 ## Secrets: what is shared with DifferenceEngine and what is not

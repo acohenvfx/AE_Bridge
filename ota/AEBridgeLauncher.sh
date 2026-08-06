@@ -29,16 +29,14 @@ AEBRIDGE_REQUIRE_TEAM_ID="${AEBRIDGE_REQUIRE_TEAM_ID-RRD4N3SXSG}"
 AEBRIDGE_SKIP_UPDATE="${AEBRIDGE_SKIP_UPDATE:-0}"
 AEBRIDGE_UPDATE_TIMEOUT="${AEBRIDGE_UPDATE_TIMEOUT:-8}"
 
-# Hosted-UI proxy (see service/routers/ui_proxy.py). Leave unset and the helper
-# serves the panel UI bundled inside the app, which always works offline.
-#
-# TODO before release: set this to the direct workers.dev origin to get
-# over-the-air panel updates. It must NOT be the custom domain
-# (aebridge.andrewcoheneditor.com) — that sits behind Cloudflare browser
-# verification, which Avid's WebView cannot complete — and the workers.dev
-# route has to be enabled in the Cloudflare dashboard first, or every panel
-# load 502s.
-export AEBRIDGE_UI_ORIGIN="${AEBRIDGE_UI_ORIGIN:-}"
+# Hosted-UI proxy (see service/routers/ui_proxy.py). Points at the direct
+# workers.dev origin, confirmed live 2026-08-06 (serves the current
+# Git-connected Workers Build, not a stale cache). Must NOT be the custom
+# domain (aebridge.andrewcoheneditor.com) — that sits behind Cloudflare
+# browser verification, which Avid's WebView cannot complete. Set to the
+# empty string to fall back to the panel UI bundled inside the app (always
+# works offline) — e.g. `AEBRIDGE_UI_ORIGIN= bash AEBridgeLauncher.sh`.
+export AEBRIDGE_UI_ORIGIN="${AEBRIDGE_UI_ORIGIN-https://ae-bridge.andrewcohenvfx.workers.dev}"
 
 # Overridable so the update path can be exercised against a local server, and
 # so an internal mirror can be used without patching the launcher.

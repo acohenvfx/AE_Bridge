@@ -130,13 +130,17 @@ Summary of what exists and what it changed:
 - **The panel UI can update over the air** without re-signing the `.avpi`. The
   helper proxies a hosted build (`service/routers/ui_proxy.py`) onto
   `localhost:8010`, because the manifest is SIGNED — `url` and `allowedDomains`
-  live inside it. **It is OFF by default** (`AEBRIDGE_UI_ORIGIN` unset), so the
-  helper serves the bundled `dist/html` exactly as before.
+  live inside it.
 - **Point it at the direct `workers.dev` origin, never the custom domain.**
   `aebridge.andrewcoheneditor.com` serves Cloudflare's `challenge-platform`
   script, which Avid's WebView cannot complete. DE documents the same trap.
-  **The workers.dev route is currently DISABLED in the dashboard**, so that
-  hostname 404s until someone enables it.
+  **RESOLVED 2026-08-06: the workers.dev route is live** —
+  `ae-bridge.andrewcohenvfx.workers.dev` returns `200` and serves the current
+  Git-connected build (checked against `wrangler deployments list`, not a
+  stale cache). `ota/AEBridgeLauncher.sh` now **defaults**
+  `AEBRIDGE_UI_ORIGIN` to that origin (verified proxying end-to-end on a
+  throwaway local helper instance); set it to the empty string to opt back
+  out to the bundled local UI.
 - **AEBridge's hosted UI is a Worker with a static Assets binding, not a Pages
   project** (that is DE). Hence `wrangler.jsonc` here, and Git-connected
   Cloudflare Workers Builds rather than a GitHub Action.
@@ -207,8 +211,10 @@ Implemented but **NOT YET RUN IN AVID** — test these three first:
    (rate/resolution/frame-count check on the AE render) is still unverified
    end to end; the probe's numbers were checked against ffprobe on existing
    files, not through a live Send → render → Import round trip.
-4. **Enable the `workers.dev` Cloudflare route** — needed before OTA UI
-   updates (`AEBRIDGE_UI_ORIGIN`) can be turned on at all; it's currently
-   disabled in the dashboard and the user hasn't done this yet.
+4. ~~Enable the `workers.dev` Cloudflare route~~ — **DONE 2026-08-06**, OTA UI
+   updates are now wired up by default (`AEBRIDGE_UI_ORIGIN` in
+   `ota/AEBridgeLauncher.sh`). Worth a real install to confirm the proxy
+   behaves the same inside the actual launchd-run helper, not just the
+   throwaway instance this was checked against.
 5. **Cut a first real (non-test) `helper-v*` release tag** — the pipeline has
    been proven end-to-end with test builds but no real release has shipped.
