@@ -164,16 +164,51 @@ Summary of what exists and what it changed:
   reason. Each arch ships its own asset; the probe only needs to match its own
   bundle.
 
+**DONE 2026-08-06 (later same day, after the distribution pipeline work):
+range auto-solo, scratch auto-select, Probe commands button removed.**
+Implemented but **NOT YET RUN IN AVID** — test these three first:
+
+- **Range auto-solo** (`s.autoGrabRange` in `src/store/toolState.js`, default
+  ON). Mirrors the existing single-shot `maybeAutoGrab()` but for the range
+  flow: `maybeAutoGrabRange()` in `AEBridgePanel.vue` watches
+  `GetMobTrackInfo` and, the moment the user manually solos the next needed
+  track in Avid, automatically fires `doGrabTrackAcrossRange()` for every
+  shot in the marked range — no more clicking "Grab V<n> for all shots" by
+  hand each time. Guarded against double-firing with the single-shot
+  autoGrab flow (`if (this.s.stack.length) return`). This is a **passive
+  watch-and-grab**, not a DoCommand-driven solo — the parked/broken
+  DoCommand track-toggle approach was deliberately NOT revived. UI checkbox:
+  "Auto-grab" next to the range shot list.
+- **Scratch auto-select on Send** (`s.autoSelectScratch`, default ON).
+  `selectScratchAfterSend()` runs after both `doSend()` and `doSendRange()`
+  succeed; best-effort call to `tl.selectScratchSubclips()`, appends a
+  "Selected N scratch subclip(s) — press Delete in Avid to clear them." note
+  to `s.message`. **Never deletes anything itself** — MCAPI has no
+  delete-mob RPC at all, so this is the closest thing to cleanup that's
+  actually possible; the human still presses Delete. UI checkbox:
+  "Auto-select on Send" in Diagnostics.
+- **Probe commands button removed** from Diagnostics per explicit
+  instruction — it was a debug leftover. `doProbeCommands()`, the `probing`
+  state, and the button are gone from `AEBridgePanel.vue`. **Not removed:**
+  `tl.probeCommands()` itself in `timeline.js` — it's a real dependency of
+  `getTrackCommandMap()`, which the still-present **"Try auto-solo"** button
+  (`restoreTrackEnableState`) calls directly.
+
+`UI_BUILD` is now `2026-08-06.5 · remove Probe commands button`.
+
 **Likely next tasks — confirm priority with the user first:**
-1. **Scratch-bin cleanup.** `AEBridge_Scratch` gains a subclip per plate per
-   pass and a range batch fills it fast. No delete-mob API; needs real
-   investigation. Most likely daily irritation.
-2. **Auto-solo**, if manual track toggling grates. One click of **Try auto-solo**
-   (Diagnostics) reveals whether it's a focus problem or the wrong flag.
-3. **Why `frame_count` reads 0** for some shots (see FIXED note above) — the
+1. **Test range auto-solo and scratch auto-select against real Avid** — both
+   are implemented and unit-reasoned but have never been run against a live
+   sequence. Do this before anything else below.
+2. **Why `frame_count` reads 0** for some shots (see FIXED note above) — the
    validation gate no longer blocks on it, but the root cause in `grabShot()`
    is still unexplained.
-4. **A real Avid return through the native probe** — return-validation itself
+3. **A real Avid return through the native probe** — return-validation itself
    (rate/resolution/frame-count check on the AE render) is still unverified
    end to end; the probe's numbers were checked against ffprobe on existing
    files, not through a live Send → render → Import round trip.
+4. **Enable the `workers.dev` Cloudflare route** — needed before OTA UI
+   updates (`AEBRIDGE_UI_ORIGIN`) can be turned on at all; it's currently
+   disabled in the dashboard and the user hasn't done this yet.
+5. **Cut a first real (non-test) `helper-v*` release tag** — the pipeline has
+   been proven end-to-end with test builds but no real release has shipped.

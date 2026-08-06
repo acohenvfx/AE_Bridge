@@ -38,11 +38,15 @@ different-span rec_in comparison was verified turned out to rest on a case
 that never exercises the actual bug; `plateOffsets` was rewritten to use
 `head_handles` instead of cross-track `rec_in` comparison.
 
-What is NOT verified: auto-solo (parked — see the `DoCommand` fact), and a
-real Avid/After Effects return through the return-validation guardrail (now
-the native AVFoundation probe, not `ffprobe`). The 2026-08-06 cuts-define-shots
-rework and the `_pl01`/`_pl02` naming rules ARE verified — user-confirmed
-against the real range test (3 shots, no duplicates, correct suffixes) on
+What is NOT verified: auto-solo (parked, DoCommand-driven — see the
+`DoCommand` fact), a real Avid/After Effects return through the
+return-validation guardrail (now the native AVFoundation probe, not
+`ffprobe`), and the two 2026-08-06 additions **range auto-solo**
+(`s.autoGrabRange`) and **scratch auto-select on Send**
+(`s.autoSelectScratch`) — built and unit-checked but never run in Avid; see
+the "Marked range" section for both. The 2026-08-06 cuts-define-shots rework
+and the `_pl01`/`_pl02` naming rules ARE verified — user-confirmed against
+the real range test (3 shots, no duplicates, correct suffixes) on
 2026-08-06.
 
 ## The grab pipeline (as-built) — `src/utils/api/timeline.js`
@@ -582,6 +586,36 @@ the N-job fan-out are all confirmed working.
   Stops on the first failure so a partial batch is obvious.
 - Per-shot state lives on the range object (`sh.grabbed`, `sh.baseName`,
   `sh.shotMeta`) via `$set`, separate from the single-shot `s.grabbed`.
+- **Range auto-solo (`s.autoGrabRange`, UI `2026-08-06.4`, default ON, NOT
+  YET RUN IN AVID).** `maybeAutoGrabRange()` extends the single-shot stack's
+  proven watch-and-react pattern (`maybeAutoGrab`) to the range flow: watches
+  Avid's live track-enable state and, when the **lowest** track still
+  missing anywhere in `rangeTracksRemaining()` is soloed, calls
+  `doGrabTrackAcrossRange` automatically instead of requiring the button.
+  Deliberately requires the LOWEST remaining track, not just any enabled
+  one — `doGrabTrackAcrossRange` degrades a shot's naming if V1 hasn't gone
+  first for it yet, same as the manual button already enforces by only
+  ever offering `rangeTracksRemaining()[0]`.
+  **Real hazard found while wiring this in:** `s.stack` (single-shot
+  Analyze) and `s.range` (Analyze range) are NOT mutually exclusive —
+  analyzing one never clears the other. With both auto-grab toggles on, a
+  solo matching both plans' next track would otherwise fire the
+  single-shot grab AND the whole-range grab from one solo.
+  `maybeAutoGrabRange` defers whenever `s.stack.length` is populated to
+  avoid that double-fire; `maybeAutoGrab` runs first in `readShot()` either
+  way. This is the SAME "watch, don't drive" mechanism as `autoGrab` —
+  nothing here touches the parked `DoCommand` track-toggle.
+- **Scratch auto-select on Send (`s.autoSelectScratch`, UI `2026-08-06.4`,
+  default ON, NOT YET RUN IN AVID).** `selectScratchAfterSend()` calls the
+  existing `selectScratchSubclips()` right after `doSend()`/`doSendRange()`
+  succeed, so the clips a shot just used are already selected in
+  `AEBridge_Scratch` — no trip to Diagnostics needed. **It can never
+  delete anything** — MCAPI has no delete-mob RPC at all, full stop, and
+  that was a deliberate scope decision (not a TODO) given the only lever
+  available, `DoCommand`, already proved unreliable for track-enable in
+  this exact codebase. The human still presses Delete in Avid. Best-effort:
+  a selection failure is logged and never surfaces as a send failure, since
+  the send itself already succeeded by the time this runs.
 
 ## Panel layout (UI `2026-07-29.7` → `2026-07-30.4`)
 
@@ -633,8 +667,12 @@ disagreed in two places here, and the markup was the better guide.
   project mode + `.aep`. Header shows a one-line summary so the values are
   legible without opening it.
 - **Diagnostics** (collapsed, was "Log"): the MCAPI log plus Pause updates,
-  Probe commands, Try auto-solo. Collapsed header still shows the build stamp
-  and an error count.
+  Select scratch / Auto-select on Send, Try auto-solo. Collapsed header still
+  shows the build stamp and an error count. **Probe commands removed
+  2026-08-06** (panel-only — `tl.probeCommands()` itself stays in
+  `timeline.js`, since `getTrackCommandMap()` calls it internally and
+  `soloVideoTrack`/`restoreTrackEnableState` — "Try auto-solo" — still need
+  that).
 - **Prefix/suffix live in the main flow**, in a dedicated Renaming section —
   per-shot naming is a real editorial need, not just collision avoidance, so it
   must not be buried in Settings. The plate rows update live as you type.
