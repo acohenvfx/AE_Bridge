@@ -49,16 +49,23 @@ def _shutdown() -> None:
     watcher.stop()
 
 
-# Serve the generated Nuxt export (assets like /_nuxt/*, "/") if it exists.
-# Mounted LAST — lowest routing priority — per the EB secure-runtime pattern.
-# Skipped when proxying: the hosted origin serves its own assets.
-if not ui_proxy.UI_ORIGIN and DIST_HTML.is_dir():
-    app.mount("/", StaticFiles(directory=str(DIST_HTML), html=True), name="ui")
-
-
 @app.get("/healthz")
 def healthz() -> dict:
     return {"ok": True, "ae": settings.ae_version}
+
+
+# Serve the generated Nuxt export (assets like /_nuxt/*, "/") if it exists.
+# Mounted LAST — lowest routing priority — per the EB secure-runtime pattern.
+# Skipped when proxying: the hosted origin serves its own assets.
+#
+# /healthz MUST be declared above this. Starlette matches routes in
+# registration order and a Mount at "/" matches everything, so a /healthz
+# defined after the mount is unreachable — it 404s. That only happens once
+# dist/html exists, i.e. in a release install and never in dev, so it survived
+# until the first frozen build was actually run. The installer polls /healthz
+# to confirm the helper started, and would have warned on every success.
+if not ui_proxy.UI_ORIGIN and DIST_HTML.is_dir():
+    app.mount("/", StaticFiles(directory=str(DIST_HTML), html=True), name="ui")
 
 
 # The hosted-UI proxy is a catch-all, so it must be registered after every real

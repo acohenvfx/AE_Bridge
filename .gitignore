@@ -16,3 +16,6 @@ element/
 
 # OS
 .DS_Store
+
+# PyInstaller build venv (ota/build-helper.sh)
+.helper-build-venv/

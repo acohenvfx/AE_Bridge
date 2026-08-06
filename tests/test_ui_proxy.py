@@ -71,3 +71,28 @@ def test_proxy_is_off_by_default_so_a_working_install_is_unchanged():
         from service.app import app
 
         assert any(getattr(r, "path", None) == "/app" for r in app.routes)
+
+
+def test_healthz_is_registered_before_the_static_mount():
+    """A Mount at "/" matches everything, so any route declared after it is
+    unreachable. /healthz defined below the mount 404s — and only once
+    dist/html exists, i.e. in a release install and never in dev, which is how
+    it survived to the first frozen build. The installer polls /healthz to
+    confirm startup, so this must stay ordered."""
+    from starlette.routing import Mount
+
+    from service.app import app
+
+    healthz_index = mount_index = None
+    for i, route in enumerate(app.routes):
+        if isinstance(route, Mount) and route.path in ("", "/"):
+            mount_index = i if mount_index is None else mount_index
+        elif getattr(route, "path", None) == "/healthz":
+            healthz_index = i
+
+    assert healthz_index is not None, "/healthz route is missing"
+    if mount_index is not None:
+        assert healthz_index < mount_index, (
+            f"/healthz (index {healthz_index}) is registered after the catch-all "
+            f"mount (index {mount_index}) and will 404"
+        )
