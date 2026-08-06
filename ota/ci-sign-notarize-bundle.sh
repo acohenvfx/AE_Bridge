@@ -40,6 +40,23 @@ printf '%s' "$MAC_CERT_P12_BASE64" | base64 --decode > "$P12"
 security import "$P12" -k "$KEYCHAIN" -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions "$KEYCHAIN"
 
+# Trim surrounding whitespace from the identity string. A secret pasted with a
+# trailing space or newline is invisible in the Actions log — GitHub masks the
+# value but not the whitespace around it — and codesign then searches for an
+# identity that does not exist, reporting only "no identity found". That cost a
+# release run.
+MAC_DEVELOPER_ID="$(printf '%s' "$MAC_DEVELOPER_ID" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+
+# Fail here, with the identities that ARE present, rather than inside codesign.
+if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -qF "$MAC_DEVELOPER_ID"; then
+  echo "FATAL: MAC_DEVELOPER_ID does not match any identity in the signing keychain." >&2
+  echo "Identities available after importing the .p12:" >&2
+  security find-identity -v -p codesigning "$KEYCHAIN" >&2
+  echo "Check MAC_DEVELOPER_ID matches one of the names above EXACTLY, e.g." >&2
+  echo "  Developer ID Application: Your Name (TEAMID)" >&2
+  exit 1
+fi
+
 sign_item() {
   local identifier="${2:-}"
   if [[ -n "$identifier" ]]; then
