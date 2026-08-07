@@ -33,8 +33,11 @@ both architectures and publishes them to `acohenvfx/AE_Bridge_Releases`.
 | `ota/ci-sign-notarize-bundle.sh` | Temp keychain, inside-out signing, `notarytool --wait`, staple, Team ID assertion, `spctl`. |
 | `ota/AEBridgeLauncher.sh` | Stable entry point: update check → download → **SHA-256 then Team ID** → atomic swap → exec. |
 | `ota/com.acohenvfx.aebridge.helper.plist.template` | launchd job. Runs the *launcher*, not the helper, so the path stays stable across versions. |
-| `installer/install-main.sh` | Installer body. Every target path is overridable, so the whole flow is testable into a temp dir. |
-| `installer/make-dmg.sh` | Builds the installer `.app` and the DMG. |
+| `installer/app-main.sh` | Installer body. Every target path is overridable, so the whole flow is testable into a temp dir. |
+| `installer/uninstall-main.sh` | Uninstaller body. `__AVPI_NAME__` is substituted at DMG build time. |
+| `installer/install-progress.js` | Cocoa progress window (JXA), driven by a status file the installer writes. |
+| `installer/AppIcon.icns` | Icon for both apps. Rebuild with `installer/make-icns.sh`. |
+| `installer/make-dmg.sh` | Builds both `.app`s and the DMG; signs and notarizes all three. |
 | `native/aebridge-probe.swift` | AVFoundation metadata probe (see below). |
 
 ## Why there is no ffprobe
@@ -223,7 +226,8 @@ Builds is Git-connected and builds on push to `main`.
 AEBRIDGE_INSTALL_RESOURCES=<dir> AEBRIDGE_INSTALL_APP_DIR=/tmp/x/Applications \
 AEBRIDGE_INSTALL_SUPPORT_DIR=/tmp/x/Support AEBRIDGE_INSTALL_AGENTS_DIR=/tmp/x/Agents \
 AEBRIDGE_INSTALL_AVID_DIR=/tmp/x/Avid AEBRIDGE_INSTALL_LOG_DIR=/tmp/x/Logs \
-AEBRIDGE_INSTALL_SKIP_LAUNCHCTL=1 bash installer/install-main.sh
+AEBRIDGE_INSTALL_SKIP_LAUNCHCTL=1 AEBRIDGE_INSTALL_NONINTERACTIVE=1 \
+bash installer/app-main.sh
 
 # Launcher against a local release server
 AEBRIDGE_RELEASE_BASE=http://127.0.0.1:8799 AEBRIDGE_REQUIRE_TEAM_ID= \

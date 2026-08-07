@@ -45,6 +45,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_DIR"
 
 APP_NAME="AEBridge Installer"
+UNINSTALL_NAME="Uninstall AEBridge"
 VOL_NAME="AEBridge"
 LABEL="com.acohenvfx.aebridge.helper"
 
@@ -175,18 +176,24 @@ APP="$STAGE/$APP_NAME.app"
 RES="$APP/Contents/Resources"
 mkdir -p "$APP/Contents/MacOS" "$RES/helper" "$RES/avpi"
 
-# --- installer app wrapper ---------------------------------------------------
-# A plain script-backed .app rather than an Xcode project: the installer has no
-# UI of its own beyond the admin prompt and Terminal output, so a compiled
-# binary would add a build dependency for no benefit.
-cat > "$APP/Contents/Info.plist" <<PLIST
+# A plain script-backed .app rather than an Xcode project: the installer's UI is
+# native dialogs and a Cocoa progress window driven from the shell, so a
+# compiled binary would add a build dependency for no benefit. Same shape as
+# DifferenceEngine's and ElementalBender's installers.
+make_app_bundle() {
+  local app="$1" name="$2" bundle_id="$3" exe="$4" body_src="$5" body_name="$6"
+  local res="$app/Contents/Resources"
+  mkdir -p "$app/Contents/MacOS" "$res"
+
+  cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>$APP_NAME</string>
-    <key>CFBundleDisplayName</key><string>$APP_NAME</string>
-    <key>CFBundleIdentifier</key><string>com.acohenvfx.aebridge.installer</string>
-    <key>CFBundleExecutable</key><string>AEBridgeInstaller</string>
+    <key>CFBundleName</key><string>$name</string>
+    <key>CFBundleDisplayName</key><string>$name</string>
+    <key>CFBundleIdentifier</key><string>$bundle_id</string>
+    <key>CFBundleExecutable</key><string>$exe</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$VERSION</string>
@@ -196,30 +203,40 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Double-clicking a .app gives no console, so re-launch in Terminal where the
-# user can actually see what happened and read any error.
-cat > "$APP/Contents/MacOS/AEBridgeInstaller" <<'LAUNCH'
+  # The executable is a thin shim: Finder needs a fixed CFBundleExecutable name,
+  # while the real body lives in Resources where it can be replaced without
+  # touching the bundle's identity.
+  cat > "$app/Contents/MacOS/$exe" <<SHIM
 #!/usr/bin/env bash
 set -euo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BODY="$HERE/../Resources/install-main.sh"
-if [[ "${AEBRIDGE_INSTALLER_IN_TERMINAL:-0}" == "1" ]]; then
-  exec /bin/bash "$BODY"
-fi
-osascript >/dev/null 2>&1 <<APPLESCRIPT
-tell application "Terminal"
-    activate
-    do script "AEBRIDGE_INSTALLER_IN_TERMINAL=1 /bin/bash " & quoted form of "$BODY"
-end tell
-APPLESCRIPT
-LAUNCH
-chmod +x "$APP/Contents/MacOS/AEBridgeInstaller"
+HERE="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+exec /bin/bash "\$HERE/../Resources/$body_name"
+SHIM
+  chmod +x "$app/Contents/MacOS/$exe"
+
+  cp "$body_src" "$res/$body_name"
+  chmod +x "$res/$body_name"
+
+  [[ -f installer/AppIcon.icns ]] && cp installer/AppIcon.icns "$res/AppIcon.icns"
+}
+
+make_app_bundle "$APP" "$APP_NAME" "com.acohenvfx.aebridge.installer" \
+  "AEBridgeInstaller" "installer/app-main.sh" "app-main.sh"
+
+# --- uninstaller app ---------------------------------------------------------
+# Ships beside the installer in the DMG, as in EB and DE. Without it the only
+# way to remove AEBridge is to hand-delete a LaunchAgent, an app bundle and a
+# file under /Library — which nobody will get right from memory.
+UNINSTALL_APP="$STAGE/$UNINSTALL_NAME.app"
+make_app_bundle "$UNINSTALL_APP" "$UNINSTALL_NAME" \
+  "com.acohenvfx.aebridge.uninstaller" "AEBridgeUninstaller" \
+  "installer/uninstall-main.sh" "uninstall-main.sh"
 
 # --- payload -----------------------------------------------------------------
-cp installer/install-main.sh "$RES/install-main.sh"
 cp ota/AEBridgeLauncher.sh "$RES/AEBridgeLauncher.sh"
 cp "ota/$LABEL.plist.template" "$RES/$LABEL.plist.template"
-chmod +x "$RES/install-main.sh" "$RES/AEBridgeLauncher.sh"
+cp installer/install-progress.js "$RES/install-progress.js"
+chmod +x "$RES/AEBridgeLauncher.sh"
 
 if [[ -d dist/AEBridgeHelper.app ]]; then
   echo "seeding helper from dist/AEBridgeHelper.app"
@@ -230,12 +247,23 @@ else
 fi
 
 AVPI="${AEBRIDGE_AVPI:-dist/AEBridge.avpi}"
+AVPI_NAME=""
 if [[ -f "$AVPI" ]]; then
+  AVPI_NAME="$(basename "$AVPI")"
   echo "including panel: $AVPI"
   cp "$AVPI" "$RES/avpi/"
 else
   echo "WARNING: no .avpi found at $AVPI — the panel will not be installed."
 fi
+
+# The uninstaller cannot guess the panel's filename (it carries a version), so
+# bake in the one this DMG ships. Its own fallback glob still catches panels
+# installed by an older DMG under a different name.
+UNINSTALL_BODY="$UNINSTALL_APP/Contents/Resources/uninstall-main.sh"
+UNINSTALL_TMP="$STAGE/uninstall-main.substituted"
+sed "s|__AVPI_NAME__|$AVPI_NAME|g" "$UNINSTALL_BODY" > "$UNINSTALL_TMP"
+mv "$UNINSTALL_TMP" "$UNINSTALL_BODY"
+chmod +x "$UNINSTALL_BODY"
 
 # --- signing + notarization --------------------------------------------------
 # The app is notarized and stapled BEFORE it goes into the DMG, so the ticket
@@ -251,7 +279,19 @@ if [[ -n "$SIGN_IDENTITY" ]]; then
   codesign --force --options runtime --timestamp \
     --sign "$SIGN_IDENTITY" "$APP"
   codesign --verify --strict --verbose=2 "$APP"
+
+  echo "signing uninstaller app..."
+  codesign --force --options runtime --timestamp \
+    --sign "$SIGN_IDENTITY" "$UNINSTALL_APP/Contents/MacOS/AEBridgeUninstaller"
+  codesign --force --options runtime --timestamp \
+    --sign "$SIGN_IDENTITY" "$UNINSTALL_APP"
+  codesign --verify --strict --verbose=2 "$UNINSTALL_APP"
+
+  # Both apps go to the notary service. The uninstaller is launched directly by
+  # the user just like the installer, so an un-notarized one is blocked exactly
+  # the same way.
   notarize_and_staple "$APP"
+  notarize_and_staple "$UNINSTALL_APP"
 else
   echo "NOTE: AEBRIDGE_UNSIGNED=1 — the installer app is unsigned and NOT"
   echo "      notarized. Local testing only; Gatekeeper will block this on any"
@@ -275,6 +315,7 @@ hdiutil create -size "${SIZE_MB}m" -fs HFS+ -volname "$VOL_NAME" -ov "$DMG_RW" >
 MOUNT="$(mktemp -d)"
 hdiutil attach "$DMG_RW" -mountpoint "$MOUNT" -nobrowse -noverify -noautoopen >/dev/null
 cp -R "$STAGE/$APP_NAME.app" "$MOUNT/"
+cp -R "$UNINSTALL_APP" "$MOUNT/"
 [[ -L "$STAGE/Applications" ]] && ln -s /Applications "$MOUNT/Applications" 2>/dev/null || true
 hdiutil detach "$MOUNT" -force >/dev/null
 rmdir "$MOUNT" 2>/dev/null || true
@@ -293,19 +334,24 @@ if [[ -n "$SIGN_IDENTITY" ]]; then
   echo "verifying Gatekeeper acceptance..."
   spctl --assess --type open --context context:primary-signature -v "$DMG_PATH"
 
-  # And the app inside it, mounted, exactly as the user will launch it.
+  # And both apps inside it, mounted, exactly as the user will launch them.
   VERIFY_MOUNT="$(mktemp -d)"
   hdiutil attach "$DMG_PATH" -mountpoint "$VERIFY_MOUNT" -nobrowse -noverify -noautoopen >/dev/null
-  if ! spctl --assess --type execute -v "$VERIFY_MOUNT/$APP_NAME.app"; then
-    hdiutil detach "$VERIFY_MOUNT" -force >/dev/null || true
-    rmdir "$VERIFY_MOUNT" 2>/dev/null || true
-    echo "FATAL: the installer app inside the DMG is not Gatekeeper-approved" >&2
-    exit 1
-  fi
-  xcrun stapler validate "$VERIFY_MOUNT/$APP_NAME.app"
+  VERIFY_FAILED=""
+  for checked in "$APP_NAME" "$UNINSTALL_NAME"; do
+    if ! spctl --assess --type execute -v "$VERIFY_MOUNT/$checked.app"; then
+      VERIFY_FAILED="$checked.app"
+      break
+    fi
+    xcrun stapler validate "$VERIFY_MOUNT/$checked.app" || { VERIFY_FAILED="$checked.app"; break; }
+  done
   hdiutil detach "$VERIFY_MOUNT" -force >/dev/null
   rmdir "$VERIFY_MOUNT" 2>/dev/null || true
-  echo "OK: DMG and installer app are signed, notarized and stapled."
+  if [[ -n "$VERIFY_FAILED" ]]; then
+    echo "FATAL: $VERIFY_FAILED inside the DMG is not Gatekeeper-approved" >&2
+    exit 1
+  fi
+  echo "OK: DMG, installer and uninstaller are signed, notarized and stapled."
 fi
 
 echo

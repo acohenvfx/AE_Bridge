@@ -151,9 +151,14 @@ Summary of what exists and what it changed:
   builds, signs and notarizes both arches into `acohenvfx/AE_Bridge_Releases`.
   All 7 repo secrets are set. `ota/AEBridgeLauncher.sh` verifies SHA-256 **and**
   Developer ID Team ID before installing anything.
-- **DMG:** `installer/make-dmg.sh` + `installer/install-main.sh`. Installs the
+- **DMG:** `installer/make-dmg.sh` + `installer/app-main.sh`. Installs the
   helper, launcher, launchd job and the `.avpi` (one admin prompt, for
-  `/Library` only).
+  `/Library` only). **Rebuilt 2026-08-06 to match ElementalBender's and
+  DifferenceEngine's installers**: native welcome dialog and Cocoa progress
+  window instead of a Terminal transcript, an app icon, and an **Uninstall
+  AEBridge.app** shipped beside it. `installer/` now mirrors their four-file
+  layout exactly. All three artifacts (installer, uninstaller, DMG) are
+  notarized and stapled.
 
 **Two lessons from that work worth not relearning:**
 
