@@ -22,6 +22,17 @@ EXPECTED_TEAM_ID="${AEBRIDGE_REQUIRE_TEAM_ID:-RRD4N3SXSG}"
 : "${MAC_NOTARY_TEAM_ID:?MAC_NOTARY_TEAM_ID is required}"
 : "${MAC_NOTARY_PASSWORD:?MAC_NOTARY_PASSWORD is required}"
 
+# A secret pasted with a trailing newline or space is invisible in a GitHub
+# Actions log (masked, but not the whitespace around it) and Apple's notary
+# service rejects it outright as bad credentials — HTTP 401, indistinguishable
+# from a genuinely wrong password. MAC_DEVELOPER_ID already learned this
+# lesson (see below); apply it to every notary credential too, since the
+# password is the one most likely to be re-pasted from somewhere that adds a
+# trailing newline (a Notes app, a password manager export, `pbpaste`).
+MAC_NOTARY_APPLE_ID="$(printf '%s' "$MAC_NOTARY_APPLE_ID" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+MAC_NOTARY_TEAM_ID="$(printf '%s' "$MAC_NOTARY_TEAM_ID" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+MAC_NOTARY_PASSWORD="$(printf '%s' "$MAC_NOTARY_PASSWORD" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+
 [[ -d "$APP_BUNDLE" ]] || { echo "FATAL: $APP_BUNDLE not found" >&2; exit 1; }
 [[ -x "$APP_EXE" ]] || { echo "FATAL: $APP_EXE not found or not executable" >&2; exit 1; }
 
