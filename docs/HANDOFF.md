@@ -38,13 +38,15 @@ different-span rec_in comparison was verified turned out to rest on a case
 that never exercises the actual bug; `plateOffsets` was rewritten to use
 `head_handles` instead of cross-track `rec_in` comparison.
 
+**Range auto-solo (`s.autoGrabRange`) is VERIFIED IN AVID (2026-08-07).**
+User-confirmed working against a live sequence.
+
 What is NOT verified: auto-solo (parked, DoCommand-driven — see the
 `DoCommand` fact), a real Avid/After Effects return through the
 return-validation guardrail (now the native AVFoundation probe, not
-`ffprobe`), and the two 2026-08-06 additions **range auto-solo**
-(`s.autoGrabRange`) and **scratch auto-select on Send**
-(`s.autoSelectScratch`) — built and unit-checked but never run in Avid; see
-the "Marked range" section for both. The 2026-08-06 cuts-define-shots rework
+`ffprobe`), and **scratch auto-select on Send** (`s.autoSelectScratch`) —
+built and unit-checked but not yet confirmed in Avid; see the "Marked range"
+section. The 2026-08-06 cuts-define-shots rework
 and the `_pl01`/`_pl02` naming rules ARE verified — user-confirmed against
 the real range test (3 shots, no duplicates, correct suffixes) on
 2026-08-06.
@@ -586,8 +588,8 @@ the N-job fan-out are all confirmed working.
   Stops on the first failure so a partial batch is obvious.
 - Per-shot state lives on the range object (`sh.grabbed`, `sh.baseName`,
   `sh.shotMeta`) via `$set`, separate from the single-shot `s.grabbed`.
-- **Range auto-solo (`s.autoGrabRange`, UI `2026-08-06.4`, default ON, NOT
-  YET RUN IN AVID).** `maybeAutoGrabRange()` extends the single-shot stack's
+- **Range auto-solo (`s.autoGrabRange`, UI `2026-08-06.4`, default ON,
+  VERIFIED IN AVID 2026-08-07).** `maybeAutoGrabRange()` extends the single-shot stack's
   proven watch-and-react pattern (`maybeAutoGrab`) to the range flow: watches
   Avid's live track-enable state and, when the **lowest** track still
   missing anywhere in `rangeTracksRemaining()` is soloed, calls
@@ -752,9 +754,25 @@ disagreed in two places here, and the markup was the better guide.
   selects all scratch subclips in one safe pass; review the count, then press
   Delete in Avid. Automatic deletion remains intentionally unimplemented until
   a stable, context-safe Avid command is verified.
+- **AVID DURATION COLUMNS ARE RIGHT-ALIGNED — `tcToFrames` CANNOT PARSE THEM.**
+  A 427-frame plate's `Duration` reads **`17:19`** (17 seconds, 19 frames), and
+  `IN-OUT` shows the same shape (`17:03`). `tcToFrames` requires four fields
+  and returns **0** otherwise, by design — a *position* missing a field is a
+  real bug. Durations therefore need `durationToFrames()`
+  (`src/utils/api/timecode.mjs`), which parses right-aligned.
+  This caused `frame_count: 0` on **every plate AEBridge ever grabbed** —
+  documented for months as "occasional", actually 19 of 19 sidecars. The chain
+  `durTC ? tcToFrames(durTC) : (end - start)` let a present-but-unparseable
+  Duration shadow the end−start fallback that worked fine. Fixed 2026-08-07;
+  `yarn test:tc` pins `17:19 -> 427`.
+  **Positions and durations are different shapes. Do not merge the two
+  parsers** — making `tcToFrames` lenient would silently reinterpret a
+  malformed absolute timecode instead of catching it.
 - **Return-side validation** probes the completed render for rate, resolution
   and frame count before the panel imports it; mismatches stop the import with
-  a useful detail string. **No longer ffprobe** — since 2026-08-05 it uses
+  a useful detail string. **The frame-count gate went live 2026-08-07** with
+  the fix above — before that `expected` was always 0, so it never ran once.
+  **No longer ffprobe** — since 2026-08-05 it uses
   `native/aebridge-probe.swift` (AVFoundation), bundled in the helper, with
   ffprobe kept only as a fallback where it happens to exist. Two things to
   know: an uncaptured expected frame count (0) is SKIPPED rather than failed

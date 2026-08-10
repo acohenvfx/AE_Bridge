@@ -128,19 +128,39 @@ export function callUnary(
 ) {
   logMcapiVerbose(`unary ${methodName}`, 'request')
   return new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (callback) => {
+      if (settled) return false
+      settled = true
+      clearTimeout(timer)
+      callback()
+      return true
+    }
     const deadline = new Date(Date.now() + timeoutMs)
-    client[methodName](request, { ...metadata, deadline }, (err, response) => {
-      if (err) {
-        logMcapiVerboseError(`unary ${methodName}`, err)
-        const code = typeof err.code !== 'undefined' ? `code=${err.code}` : ''
-        const message =
-          err && err.message ? err.message : `MCAPI ${methodName} failed`
-        reject(new Error([code, message].filter(Boolean).join(' ')))
-        return
-      }
-      logMcapiVerbose(`unary ${methodName}`, 'ok')
-      resolve(response)
-    })
+    const timer = setTimeout(() => {
+      const error = new Error(`MCAPI ${methodName} timed out after ${timeoutMs}ms`)
+      error.code = 4
+      logMcapiVerboseError(`unary ${methodName}`, error)
+      finish(() => reject(error))
+    }, timeoutMs)
+    try {
+      client[methodName](request, { ...metadata, deadline }, (err, response) => {
+        if (err) {
+          logMcapiVerboseError(`unary ${methodName}`, err)
+          const code = typeof err.code !== 'undefined' ? `code=${err.code}` : ''
+          const message =
+            err && err.message ? err.message : `MCAPI ${methodName} failed`
+          finish(() => reject(new Error([code, message].filter(Boolean).join(' '))))
+          return
+        }
+        finish(() => {
+          logMcapiVerbose(`unary ${methodName}`, 'ok')
+          resolve(response)
+        })
+      })
+    } catch (error) {
+      finish(() => reject(error))
+    }
   })
 }
 
@@ -150,15 +170,57 @@ export function callUnary(
  * and the 'error' handler receives a timeout error.
  */
 export function streamWithTimeout(stream, timeoutMs = 30000) {
-  const timer = setTimeout(() => {
-    logMcapiVerboseError('stream timeout', `cancelled after ${timeoutMs}ms`)
-    stream.cancel()
-  }, timeoutMs)
+  let timer = null
+  let completed = false
+  let timedOut = false
+  let timeoutError = null
+  const errorHandlers = new Set()
   const origOn = stream.on.bind(stream)
+
+  const clearTimer = () => {
+    if (timer !== null) {
+      clearTimeout(timer)
+      timer = null
+    }
+  }
+
+  const timeout = () => {
+    if (completed || timedOut) return
+    timedOut = true
+    clearTimer()
+    timeoutError = new Error(`MCAPI stream timed out after ${timeoutMs}ms`)
+    timeoutError.code = 4
+    logMcapiVerboseError('stream timeout', timeoutError)
+    try {
+      stream.cancel()
+    } catch (error) {
+      logMcapiVerboseError('stream cancel failed', error)
+    }
+    for (const handler of errorHandlers) {
+      handler.call(stream, timeoutError)
+    }
+  }
+
+  timer = setTimeout(timeout, timeoutMs)
   stream.on = function wrappedOn(event, handler) {
-    if (event === 'end' || event === 'error') {
+    if (event === 'error') {
+      errorHandlers.add(handler)
+      if (timedOut) {
+        queueMicrotask(() => handler.call(stream, timeoutError))
+      } else {
+        origOn(event, function () {
+          if (timedOut) return
+          completed = true
+          clearTimer()
+          handler.apply(this, arguments)
+        })
+      }
+    } else if (event === 'end') {
+      if (timedOut) return stream
       origOn(event, function () {
-        clearTimeout(timer)
+        if (timedOut) return
+        completed = true
+        clearTimer()
         handler.apply(this, arguments)
       })
     } else {

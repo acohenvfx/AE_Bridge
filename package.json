@@ -17,7 +17,9 @@
     "format": "prettier --write .",
     "check:tpl": "node tools/check-vue-template.js src/components/AEBridgePanel.vue",
     "test:edl": "node tests/test_edl_plan.mjs",
-    "test:offsets": "node tests/test_plate_offsets.mjs"
+    "test:offsets": "node tests/test_plate_offsets.mjs",
+    "test:tc": "node tests/test_timecode.mjs",
+    "test:tracksel": "node tests/test_track_selection.mjs"
   },
   "dependencies": {
     "google-protobuf": "^3.21.4",

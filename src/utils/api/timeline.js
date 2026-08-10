@@ -64,6 +64,8 @@ import {
   withPlateSuffix,
 } from '~/utils/api/edlPlan.mjs'
 import { recoverEdl } from '~/utils/api/aebridge.js'
+import { tcToFrames, durationToFrames } from '~/utils/api/timecode.mjs'
+import { narrowToSelection, lowestTrack } from '~/utils/api/trackSelection.mjs'
 
 const TRACKTYPE_PICTURE = 0 // TrackType.TRACKTYPE_PICTURE (video)
 import {
@@ -88,11 +90,11 @@ function requireClient() {
 }
 
 // --- viewers ---------------------------------------------------------------
-export async function getViewerMobs() {
+export async function getViewerMobs(timeoutMs = 30000) {
   const client = requireClient()
   const req = new GetViewerMobsRequest()
   req.setBody(new GetViewerMobsRequestBody())
-  const res = await callUnary(client, 'getViewerMobs', req, getAccessTokenMetadata())
+  const res = await callUnary(client, 'getViewerMobs', req, getAccessTokenMetadata(), timeoutMs)
   const body = res && res.getBody ? res.getBody() : null
   const mobs = body && body.getMobsList ? body.getMobsList() : []
   return mobs.map((m) => ({
@@ -240,34 +242,49 @@ export async function analyzeRange({ parseEdl }) {
   }
 
   const allTracks = await getMobTrackInfo(shot.mobId)
-  const vids = allTracks
+  const withContent = allTracks
     .filter((t) => t.type === TRACKTYPE_PICTURE && t.numSegments > 0)
     .sort((a, b) => a.number - b.number)
-  const v1 = vids.find((t) => t.number === 1)
-  if (!v1) throw new Error('No V1 with content on this sequence')
+  // Selected track heads narrow the scan the same way analyzeStack does — see
+  // trackSelection.mjs. The ANCHOR (ordinarily V1) is whichever track ends up
+  // lowest after narrowing: its EDL is what defines shot boundaries below
+  // (cuts define shots), and its marker names every shot in the range.
+  const vids = narrowToSelection(withContent)
+  const anchor = lowestTrack(vids)
+  if (!anchor) {
+    throw new Error(vids.length !== withContent.length
+      ? 'No selected video track has content on this sequence.'
+      : 'No video track with content on this sequence.')
+  }
 
   // One all-track EDL is split locally and reused for every shot. If Avid's
   // selected List Tool format omits track labels, loadTrackEdls falls back to
   // paced per-track requests. A failed track is never silently dropped.
   const edls = await loadTrackEdls({ mobId: shot.mobId, sequenceName: shot.name, tracks: vids, parseEdl })
 
-  // CUTS DEFINE SHOTS; MARKERS ONLY NAME THEM. One shot per V1 EDL event —
-  // including through-edits: this preset reports a cut with CONTINUING source
-  // timecode as two events (confirmed 2026-08-06: src_out 00:07:45:08 →
-  // src_in 00:07:45:09), so "the cut on a continuous clip" is visible here.
-  // An earlier version also split clips at V1 markers, treating them as cut
-  // points. That was refuted the same day it was really tested: the user's
-  // markers sit MID-shot as labels, so marker boundaries chopped every real
-  // clip into two half-shots, both halves grabbed identical media (see the
-  // CreateSubClip explicit-frames fact — bounding doesn't work anyway) and
-  // converged on the same name — "2 of each clip". A truly uncut clip
-  // spanning several shots is, per the user's own rule, ONE clip; the editor
-  // splits it by adding a through-edit in Avid, not by dropping markers.
+  // CUTS DEFINE SHOTS; MARKERS ONLY NAME THEM. One shot per ANCHOR-track EDL
+  // event — including through-edits: this preset reports a cut with
+  // CONTINUING source timecode as two events (confirmed 2026-08-06: src_out
+  // 00:07:45:08 → src_in 00:07:45:09), so "the cut on a continuous clip" is
+  // visible here. An earlier version also split clips at V1 markers, treating
+  // them as cut points. That was refuted the same day it was really tested:
+  // the user's markers sit MID-shot as labels, so marker boundaries chopped
+  // every real clip into two half-shots, both halves grabbed identical media
+  // (see the CreateSubClip explicit-frames fact — bounding doesn't work
+  // anyway) and converged on the same name — "2 of each clip". A truly uncut
+  // clip spanning several shots is, per the user's own rule, ONE clip; the
+  // editor splits it by adding a through-edit in Avid, not by dropping
+  // markers.
   //
-  // A V1 clip is in range if it OVERLAPS [markIn, markOut) — a range that
-  // starts mid-clip still means the editor wants that shot.
+  // The anchor is V1 unless the editor narrowed the analysis by SELECTING
+  // other tracks (see trackSelection.mjs) — e.g. only V14-16 selected on a
+  // 20-track sequence makes V14 the anchor, and shots are then defined by
+  // V14's cuts rather than V1's.
+  //
+  // An anchor clip is in range if it OVERLAPS [markIn, markOut) — a range
+  // that starts mid-clip still means the editor wants that shot.
   const shots = []
-  for (const c of edls[1] || []) {
+  for (const c of edls[anchor.number] || []) {
     const cIn = tcToFrames(c.rec_in, fps)
     const cOut = tcToFrames(c.rec_out, fps)
     if (cOut <= inF || cIn >= outF) continue
@@ -323,15 +340,17 @@ export async function analyzeRange({ parseEdl }) {
   logMcapiVerbose('marked range', {
     markIn: shot.markIn, markOut: shot.markOut,
     seqStartTC: shot.startTC, seqStartFrame: seqStartF,
+    anchorTrack: anchor.number,
+    narrowedToSelection: vids.length !== withContent.length,
     shots: shots.map((s) => ({
       at: s.atTC, frame: s.atFrame, clip: s.clipName,
       plates: s.stack.map((p) => 'V' + p.track),
     })),
   })
   if (!shots.length) {
-    throw new Error('No V1 clips inside ' + shot.markIn + '–' + shot.markOut + '.')
+    throw new Error('No V' + anchor.number + ' clips inside ' + shot.markIn + '–' + shot.markOut + '.')
   }
-  return { shot, shots }
+  return { shot, shots, anchorTrack: anchor.number }
 }
 
 // --- bin listing (to recover the subclip mob id) ---------------------------
@@ -462,13 +481,13 @@ export async function ensureBin(binName) {
 // Handles come from the SOURCE master clip's own media (never the sequence
 // timeline): subclip the marked portion of the source clip, then extend THAT
 // subclip by `handles`.
-export async function getMobTrackInfo(mobId) {
+export async function getMobTrackInfo(mobId, timeoutMs = 30000) {
   const client = requireClient()
   const req = new GetMobTrackInfoRequest()
   const body = new GetMobTrackInfoRequestBody()
   body.setMobId(mobId)
   req.setBody(body)
-  const res = await callUnary(client, 'getMobTrackInfo', req, getAccessTokenMetadata())
+  const res = await callUnary(client, 'getMobTrackInfo', req, getAccessTokenMetadata(), timeoutMs)
   const b = res && res.getBody ? res.getBody() : null
   const list = b && b.getTrackInfoList ? b.getTrackInfoList() : null
   const infos = list && list.getTrackInfoList ? list.getTrackInfoList() : []
@@ -483,12 +502,6 @@ export async function getMobTrackInfo(mobId) {
       numSegments: ti.getNumSegments ? ti.getNumSegments() : 0,
     }
   })
-}
-
-export function videoTracks(tracks) {
-  return tracks
-    .filter((t) => t.type === TRACKTYPE_PICTURE && (t.enabled || t.selected) && t.numSegments > 0)
-    .sort((a, b) => a.number - b.number)
 }
 
 // Video tracks that are ENABLED — strictly, not "enabled or selected". This is
@@ -805,9 +818,16 @@ export async function analyzeStack({ parseEdl }) {
   const shot = await getCurrentShot()
   const allTracks = await getMobTrackInfo(shot.mobId)
   const fps = 24
-  const vids = allTracks
+  const withContent = allTracks
     .filter((t) => t.type === TRACKTYPE_PICTURE && t.numSegments > 0)
     .sort((a, b) => a.number - b.number)
+  // If the editor has SELECTED specific track heads (distinct from `enabled`
+  // — see HANDOFF.md and trackSelection.mjs), only those are analyzed. A wide
+  // sequence (many video tracks) can be pointed at just the ones that matter
+  // instead of scanning every track with content — which also means fewer
+  // EDL exports (one per track analyzed; see the "EDL filename counter" fact).
+  const vids = narrowToSelection(withContent)
+  const anchor = lowestTrack(vids)
   const edls = await loadTrackEdls({ mobId: shot.mobId, sequenceName: shot.name, tracks: vids, parseEdl })
   const stack = []
   for (const t of vids) {
@@ -828,8 +848,13 @@ export async function analyzeStack({ parseEdl }) {
       })
     }
   }
-  logMcapiVerbose('stack at playhead', { playheadTC: shot.playheadTC, tracks: stack.map((s) => 'V' + s.track) })
-  return { shot, stack }
+  logMcapiVerbose('stack at playhead', {
+    playheadTC: shot.playheadTC,
+    tracks: stack.map((s) => 'V' + s.track),
+    anchorTrack: anchor ? anchor.number : null,
+    narrowedToSelection: vids.length !== withContent.length,
+  })
+  return { shot, stack, anchorTrack: anchor ? anchor.number : null }
 }
 
 async function grabSourceHandledMob({ sequenceMobId, sequenceName = '', atTC, atFrame, parseEdl, destBinPath, handles, trackNumber = 1, targetHint = null, scratchBin = 'AEBridge_Scratch' }) {
@@ -1076,7 +1101,12 @@ export async function importReturn({ filePath, destBinPath, importSettingsName =
 // a track), each call requiring that track to be the only enabled video track
 // over the shot. `baseName` carries V1's marker name to the upper passes so
 // every plate in a stack shares one base.
-export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trackNumber = 1, baseName = '', atTC = '', atFrame = null, targetHint = null }) {
+// `anchorTrack` is which track NAMES the stack — ordinarily V1, but a
+// selection-narrowed analysis (see trackSelection.mjs) can make it any track,
+// e.g. V14 when only V14-16 were selected. Defaults to 1 for a bare single-
+// plate grab with no stack/range plan behind it, where there's nothing else
+// to anchor to.
+export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trackNumber = 1, anchorTrack = 1, baseName = '', atTC = '', atFrame = null, targetHint = null }) {
   const shot = await getCurrentShot()
   // Default to the playhead; a range grab passes the target clip's position so
   // several shots can be grabbed without the editor moving anything.
@@ -1122,38 +1152,44 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trac
       marker = markerLabel(chosen)
       logMcapiVerbose('marker for V' + trackNumber, { inF, outF, playheadFrame: phF, count: within.length, marker })
     }
-    // Fall back to any marker the subclip itself retained — V1 ONLY.
+    // Fall back to any marker the subclip itself retained — ANCHOR TRACK ONLY.
     // This read has no track filter and no span filter (a subclip's markers
     // carry neither reliably), so on an UPPER track it will happily return a
-    // marker belonging to V1. That was harmless while every subclip spanned a
-    // whole clip, but a marker-split segment (see analyzeRange) starts
-    // EXACTLY on a marker, and `createRawSubclip` sets retainMarkers:true —
-    // so the segment's subclip retains V1's marker at its own frame 0 and
-    // every upper plate in the stack came back named after it. Reported live:
-    // the top plate of a stack taking V1's `..._pl01` name. An upper track
-    // with no marker of its own is supposed to fall through to the `_plNN`
-    // form, which is exactly what skipping this does.
-    if (!marker && trackNumber === 1) {
+    // marker belonging to the anchor. That was harmless while every subclip
+    // spanned a whole clip, but a marker-split segment (see analyzeRange)
+    // starts EXACTLY on a marker, and `createRawSubclip` sets
+    // retainMarkers:true — so the segment's subclip retains the anchor's
+    // marker at its own frame 0 and every upper plate in the stack came back
+    // named after it. Reported live (when the anchor was V1): the top plate
+    // of a stack taking V1's `..._pl01` name. An upper track with no marker
+    // of its own is supposed to fall through to the `_plNN` form, which is
+    // exactly what skipping this does.
+    if (!marker && trackNumber === anchorTrack) {
       marker = markerLabel(await getMarkers(sequence.mobId).catch(() => []))
     }
   } catch (e) {
     logMcapiVerbose('marker read failed', e.message)
   }
 
-  // Naming. The first pass (V1) names the whole stack from its marker — always
+  // Naming. The first pass (the ANCHOR track — ordinarily V1, see
+  // analyzeStack/analyzeRange) names the whole stack from its marker — always
   // suffixed _pl01 (withPlateSuffix), even when the marker is just the bare
-  // shot name, so V1's own plate reads as part of the stack the same way
-  // every upper plate already does. An upper track prefers its OWN marker
-  // as-is; `_plNN` is only the fallback for a track that has no marker of
-  // its own.
+  // shot name, so the anchor's own plate reads as part of the stack the same
+  // way every upper plate already does. An upper track prefers its OWN
+  // marker as-is; `_plNN` is only the fallback for a track that has no
+  // marker of its own.
   const name = baseName || marker || sequence.mobName || shot.name
   // Upper fallback REPLACES the base's trailing _plNN rather than appending —
-  // V1 marker comments routinely carry _pl01 already, and appending produced
-  // `<shot>_pl01_pl02`. A plate carries exactly one _plNN: its own.
-  const plateName = trackNumber === 1
+  // the anchor's marker comment routinely carries _pl01 already, and
+  // appending produced `<shot>_pl01_pl02`. A plate carries exactly one
+  // _plNN: its own. Note the literal `1` in withPlateSuffix is a STACK
+  // POSITION (the anchor is always plate 1 of its stack), not the Avid track
+  // number — unlike plateNameForTrack's `_plNN`, which upper plates suffix
+  // with their real track number.
+  const plateName = trackNumber === anchorTrack
     ? withPlateSuffix(name, 1)
     : (marker || plateNameForTrack(name, trackNumber))
-  logMcapiVerbose('plate name', { track: 'V' + trackNumber, marker: marker || null, base: name, plateName, fromMarker: !!(trackNumber !== 1 && marker) })
+  logMcapiVerbose('plate name', { track: 'V' + trackNumber, anchorTrack, marker: marker || null, base: name, plateName, fromMarker: !!(trackNumber !== anchorTrack && marker) })
   for (const item of created) {
     await renameMob(item.mobId, plateName).catch((e) => logMcapiVerbose('rename failed', { id: item.mobId, err: e.message }))
   }
@@ -1163,12 +1199,35 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trac
   const startTC = pick(subCols, ['Start', 'Mark IN'])
   const endTC = pick(subCols, ['End', 'Mark OUT'])
   const fps = Math.round(parseFloat(shot.frameRate) || 24)
+
+  // FIXED 2026-08-07: every plate ever grabbed carried frame_count 0.
+  //
+  // These columns belong to the SUBCLIP just created, so they describe the
+  // exported plate itself, handles included — verified frame-for-frame against
+  // the .mov (427 frames from Start/End, 427 from `Duration`, 427 from the
+  // native probe).
+  //
+  // The old chain was `durTC ? tcToFrames(durTC) : (end - start)`, and Avid's
+  // `Duration` reads RIGHT-ALIGNED (`17:19`), which tcToFrames rejects for
+  // having fewer than four fields. So a present Duration shadowed the
+  // end−start fallback and the result was always 0. Order now runs
+  // most-reliable first, and the Duration path uses a duration-aware parser.
   let frameCount = Number(pick(subCols, ['Duration Frames'])) || 0
-  if (!frameCount) {
-    const durTC = pick(subCols, ['Duration'])
-    frameCount = durTC ? tcToFrames(durTC, fps) : (tcToFrames(endTC, fps) - tcToFrames(startTC, fps))
-  }
+  if (!frameCount) frameCount = tcToFrames(endTC, fps) - tcToFrames(startTC, fps)
+  if (!frameCount) frameCount = durationToFrames(pick(subCols, ['Duration']), fps)
   if (!frameCount || frameCount < 0) frameCount = 0
+  if (!frameCount) {
+    // Never silent: a 0 here disables the return-validation frame-count gate
+    // (service/media.py treats <= 0 as "never captured"), so it must be
+    // visible in the log rather than discovered later at Import.
+    logMcapiVerbose('frame_count unresolved', {
+      plate: plateName,
+      start: startTC || null,
+      end: endTC || null,
+      duration: pick(subCols, ['Duration']) || null,
+      durationFrames: pick(subCols, ['Duration Frames']) || null,
+    })
+  }
 
   return {
     exportMobId: sequence.mobId,
@@ -1336,7 +1395,8 @@ async function waitForTrackEnabled(sequenceMobId, trackNumber, want, timeoutMs =
   const deadline = Date.now() + timeoutMs
   let last = null
   while (Date.now() < deadline) {
-    last = await getMobTrackInfo(sequenceMobId)
+    const remaining = Math.max(1, deadline - Date.now())
+    last = await getMobTrackInfo(sequenceMobId, Math.min(1000, remaining))
     const t = last.find((x) => x.type === TRACKTYPE_PICTURE && x.number === trackNumber)
     if (t && !!t.enabled === !!want) return last
     await sleep(120)
@@ -1443,12 +1503,8 @@ export async function exportShot({ mobId, exportDir, fileName, exportSettingsNam
 }
 
 // HH:MM:SS:FF -> total frames (non-drop; TC labels at round(fps)).
-function tcToFrames(tc, fps) {
-  const p = String(tc || '').split(/[:;]/).map((n) => parseInt(n, 10))
-  if (p.length < 4 || p.some(isNaN)) return 0
-  const [hh, mm, ss, ff] = p
-  return ((hh * 60 + mm) * 60 + ss) * fps + ff
-}
+// tcToFrames / durationToFrames now live in ~/utils/api/timecode.mjs so plain
+// Node can unit-test them (tests/test_timecode.mjs).
 
 // Inverse of tcToFrames (non-drop; TC labels at round(fps)).
 function framesToTc(frames, fps) {

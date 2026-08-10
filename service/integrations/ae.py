@@ -335,7 +335,10 @@ def make_placeholder_plate(dest: Path, w: int, h: int, frame_rate: str, frame_co
         str(dest),
     ]
     try:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        subprocess.run(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=True, timeout=60,
+        )
         return dest.exists() and dest.stat().st_size > 0
     except Exception:
         return False

@@ -32,6 +32,13 @@ export const aebridge = Vue.observable({
   // track and it isolates exactly one per grab.
   stack: [],
   stackTC: '',
+  // Which track NAMES the stack — ordinarily V1, but selecting specific track
+  // heads in Avid before Analyze (see trackSelection.mjs) can narrow the scan
+  // to any subset, in which case the lowest one becomes the anchor. Set once
+  // when a fresh (non-merge) stack is established in doAnalyze and left alone
+  // on a same-playhead re-Analyze, so a later selection change can never shift
+  // the anchor out from under plates already grabbed under the old one.
+  stackAnchorTrack: null,
   // Horizontal batch: the sequence's marked range split into one shot per V1
   // clip, each with its own plate stack. Read-only plan for now.
   range: null,

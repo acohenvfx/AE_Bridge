@@ -69,7 +69,7 @@
             <button
               class="eb-btn eb-btn--ghost eb-btn--mini"
               :disabled="s.rangeAnalyzing"
-              title="Use the sequence's IN/OUT marks: one shot per V1 clip in the range, each with its own plate stack"
+              title="Use the sequence's IN/OUT marks: one shot per anchor-track clip in the range (normally V1 — select other track heads first to analyze only those), each with its own plate stack"
               @click="doAnalyzeRange"
             >{{ s.rangeAnalyzing ? 'Reading range…' : 'Analyze range' }}</button>
             <label v-if="s.stack.length" class="eb-chip" :class="{ 'is-on': s.autoGrab }" :title="'Grab each plate automatically as you solo its track in the Avid timeline'">
@@ -472,6 +472,28 @@
         <textarea ref="logcopy" class="eb-hidden-copy" :value="logText" readonly aria-hidden="true"></textarea>
       </div>
     </div>
+
+    <!-- Non-blocking confirm/notice. Replaces window.confirm/window.alert,
+         which block the WebView JS thread and can hang the panel inside Avid's
+         embedded browser (no native dialog chrome to dismiss). -->
+    <div v-if="confirmState.open || noticeState.open" class="ae-modal-scrim">
+      <div class="ae-modal">
+        <div v-if="confirmState.open">
+          <div class="ae-modal-body">{{ confirmState.message }}</div>
+          <div class="eb-actions ae-modal-actions">
+            <button class="eb-btn eb-btn--ghost" @click="resolveConfirm(false)">Cancel</button>
+            <button class="eb-btn eb-btn--primary" @click="resolveConfirm(true)">OK</button>
+          </div>
+        </div>
+        <div v-else>
+          <div v-if="noticeState.title" class="ae-modal-title">{{ noticeState.title }}</div>
+          <div class="ae-modal-body">{{ noticeState.body }}</div>
+          <div class="eb-actions ae-modal-actions">
+            <button class="eb-btn eb-btn--primary" @click="noticeState.open = false">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -483,7 +505,7 @@ import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-08-06.5 · remove Probe commands button'
+const UI_BUILD = '2026-08-07.1 · fix frame_count always 0'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -505,7 +527,7 @@ function sig(list) {
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', autoGrabRangeStatus: '', selectingScratch: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0 }
+    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', autoGrabRangeStatus: '', selectingScratch: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0, confirmState: { open: false, message: '', _resolve: null }, noticeState: { open: false, title: '', body: '' } }
   },
   computed: {
     logText() {
@@ -607,10 +629,15 @@ export default {
     helperHasReturnValidation() {
       return (this.s.helperFeatures || []).includes('aebridge.return_validation')
     },
-    // Lowest track not yet grabbed — grabbed bottom-up so V1's marker names the stack.
+    // Lowest track not yet grabbed — grabbed bottom-up so the anchor track's
+    // marker names the stack.
     nextTrack() {
       const pending = this.s.stack.filter((p) => !this.isGrabbed(p.track))
       return pending.length ? pending[0].track : null
+    },
+    // Which track names this stack. See s.stackAnchorTrack in toolState.js.
+    anchorTrack() {
+      return this.s.stackAnchorTrack
     },
     // Tracks the user must turn OFF for the next pass (any other track in the stack).
     otherTracks() {
@@ -680,6 +707,22 @@ export default {
     's.autoSelectScratch'(v) { this.savePref('autoSelectScratch', v ? '1' : '0') }
   },
   methods: {
+    // Non-blocking replacements for window.confirm/window.alert. A native
+    // dialog blocks the WebView's JS thread, and Avid's embedded browser often
+    // has no chrome to dismiss it — so the panel appears frozen.
+    askConfirm(message) {
+      return new Promise((resolve) => {
+        this.confirmState = { open: true, message, _resolve: resolve }
+      })
+    },
+    resolveConfirm(ok) {
+      const r = this.confirmState._resolve
+      this.confirmState = { open: false, message: '', _resolve: null }
+      if (r) r(ok)
+    },
+    showNotice(title, body) {
+      this.noticeState = { open: true, title: title || '', body: body || '' }
+    },
     savePref(k, v) {
       try { window.localStorage.setItem('aebridge.' + k, v == null ? '' : String(v)) } catch (e) {}
     },
@@ -856,9 +899,9 @@ export default {
         this.autoGrabStatus = 'V' + solo + ' already grabbed — solo V' + this.nextTrack + ' next.'
         return
       }
-      // V1 must go first: its marker names the whole stack.
-      if (!this.s.baseName && solo !== 1) {
-        this.autoGrabStatus = 'Solo V1 first — it names the stack.'
+      // The anchor track must go first: its marker names the whole stack.
+      if (!this.s.baseName && solo !== this.anchorTrack) {
+        this.autoGrabStatus = 'Solo V' + this.anchorTrack + ' first — it names the stack.'
         return
       }
       this.autoGrabStatus = ''
@@ -869,10 +912,10 @@ export default {
     // (doGrabTrackAcrossRange) instead of one shot's plate. Deliberately
     // requires the LOWEST remaining track — the same one the manual button
     // already offers — rather than accepting whichever track got soloed:
-    // doGrabTrackAcrossRange degrades gracefully if V1 hasn't gone first for a
-    // shot yet (it falls back to that track's own marker instead of the
-    // shot's real name), but there is no reason to invite that when the
-    // ordering the UI already advertises is one solo away.
+    // doGrabTrackAcrossRange degrades gracefully if the anchor track hasn't
+    // gone first for a shot yet (it falls back to that track's own marker
+    // instead of the shot's real name), but there is no reason to invite that
+    // when the ordering the UI already advertises is one solo away.
     async maybeAutoGrabRange() {
       if (!this.s.autoGrabRange || !this.s.inAvid) return
       if (!this.s.range || !this.s.range.shots.length) return
@@ -907,7 +950,7 @@ export default {
       }
       const solo = enabled[0]
       if (solo !== next) {
-        this.autoGrabRangeStatus = 'Solo V' + next + ' next, not V' + solo + ' — grabbed in order so each shot\'s V1 names it first.'
+        this.autoGrabRangeStatus = 'Solo V' + next + ' next, not V' + solo + ' — grabbed in order so the anchor track (V' + this.s.range.anchorTrack + ') names each shot first.'
         return
       }
       this.autoGrabRangeStatus = ''
@@ -926,7 +969,7 @@ export default {
       if (g) return this.withAffixes(g.name)
       // Not grabbed yet — a preview. Each track prefers its own marker, which
       // can only be read at grab time, so upper tracks show the fallback form.
-      if (track === 1) return this.s.baseName ? this.withAffixes(this.s.baseName) : 'from V1 marker'
+      if (track === this.anchorTrack) return this.s.baseName ? this.withAffixes(this.s.baseName) : 'from V' + this.anchorTrack + ' marker'
       const base = this.s.baseName || '<shot>'
       return 'own marker, else ' + this.withAffixes(base + '_pl' + String(track).padStart(2, '0'))
     },
@@ -936,6 +979,7 @@ export default {
       this.s.baseName = ''
       this.s.stackShot = null
       this.s.stackTC = ''
+      this.s.stackAnchorTrack = null
       this.s.message = ''
     },
     // Drop one grabbed plate so it can be grabbed again. The Avid subclip is
@@ -943,12 +987,14 @@ export default {
     // you want after deleting the subclip by hand.
     ungrab(track) {
       this.s.grabbed = this.s.grabbed.filter((g) => g.track !== track)
-      // V1 names the stack, so dropping it invalidates the inherited names.
-      if (track === 1) {
+      // The anchor names the stack, so dropping it invalidates the inherited
+      // names. s.stack (the plan) and s.stackAnchorTrack are left alone — the
+      // same track re-grabs as the anchor again.
+      if (track === this.anchorTrack) {
         this.s.baseName = ''
         this.s.stackShot = null
         this.s.grabbed = []
-        this.s.message = 'Dropped V1 — the whole stack must be re-grabbed (V1 names it).'
+        this.s.message = 'Dropped V' + track + ' — the whole stack must be re-grabbed (it names the stack).'
       } else {
         this.s.message = 'Dropped V' + track + ' — grab it again.'
       }
@@ -967,15 +1013,24 @@ export default {
           this.s.baseName = ''
           this.s.stackShot = null
           this.s.stack = r.stack
+          this.s.stackAnchorTrack = r.anchorTrack
         } else {
           // Same shot, re-scanned: UNION with the existing plan. Mid-stack the
           // user has tracks disabled, and it is not established that ExportEDL
           // reports a disabled track — without this merge a re-Analyze could
           // silently drop plates that are still to be grabbed.
+          //
+          // The anchor is deliberately NOT re-derived here even though the
+          // editor's track SELECTION could have changed between two Analyze
+          // clicks on the same shot: if it already named the stack (baseName
+          // set), a differently-selected re-Analyze must not silently move
+          // naming to a new lower track out from under an already-grabbed
+          // anchor plate. Only backfilled if somehow still unset.
           const byTrack = {}
           for (const p of this.s.stack) byTrack[p.track] = p
           for (const p of r.stack) byTrack[p.track] = p
           this.s.stack = Object.values(byTrack).sort((a, b) => a.track - b.track)
+          if (!this.s.stackAnchorTrack) this.s.stackAnchorTrack = r.anchorTrack
         }
         this.s.stackTC = r.shot.playheadTC
         this.s.message = this.s.stack.length
@@ -1043,6 +1098,7 @@ export default {
           markOut: r.shot.markOut,
           shots: r.shots,
           totalPlates,
+          anchorTrack: r.anchorTrack,
         }
         this.s.message = r.shots.length + ' shot(s), ' + totalPlates + ' plate(s) in ' +
           r.shot.markIn + '–' + r.shot.markOut
@@ -1053,8 +1109,9 @@ export default {
         this.s.rangeAnalyzing = false
       }
     },
-    // Tracks still to grab across the range, ascending. V1 first because each
-    // shot's V1 marker names that shot's whole stack.
+    // Tracks still to grab across the range, ascending. The anchor track (see
+    // s.range.anchorTrack) goes first because its marker names each shot's
+    // whole stack.
     rangeTracksRemaining() {
       if (!this.s.range) return []
       const out = []
@@ -1088,14 +1145,15 @@ export default {
             destBinPath: this.s.destBin,
             handles: Number(this.s.handles) || 0,
             trackNumber: track,
-            baseName: track === 1 ? '' : (sh.baseName || ''),
+            anchorTrack: this.s.range.anchorTrack,
+            baseName: track === this.s.range.anchorTrack ? '' : (sh.baseName || ''),
             atTC: sh.atTC,
             atFrame: sh.atFrame,
             targetHint,
             parseEdl: (edlPath) => api.parseEdl(edlPath).then((x) => x.clips)
           }).catch((e) => { throw new Error('shot ' + (i + 1) + ' (' + sh.atTC + '): ' + e.message) })
 
-          if (track === 1) {
+          if (track === this.s.range.anchorTrack) {
             this.$set(sh, 'baseName', grabbed.shot.shot_name)
             this.$set(sh, 'shotMeta', grabbed.shot)
           }
@@ -1121,13 +1179,14 @@ export default {
           destBinPath: this.s.destBin,
           handles: Number(this.s.handles) || 0,
           trackNumber: track,
-          baseName: track === 1 ? '' : this.s.baseName,
+          anchorTrack: this.anchorTrack,
+          baseName: track === this.anchorTrack ? '' : this.s.baseName,
           targetHint,
           parseEdl: (edlPath) => api.parseEdl(edlPath).then((r) => r.clips)
         })
-        if (track === 1) {
+        if (track === this.anchorTrack) {
           this.s.baseName = grabbed.shot.shot_name
-          this.s.stackShot = grabbed.shot // V1 defines the comp's size/rate/duration
+          this.s.stackShot = grabbed.shot // the anchor defines the comp's size/rate/duration
         }
         this.s.grabbed = this.s.grabbed
           .filter((g) => g.track !== track)
@@ -1204,7 +1263,7 @@ export default {
         this.s.message = 'Restart the AEBridge helper first — the running one predates /reset.'
         return
       }
-      const ok = window.confirm(
+      const ok = await this.askConfirm(
         'Hard reset the job queue?\n\n' +
         'Every job is dropped, whatever its state.\n\n' +
         'Nothing on disk is deleted, and renders you have already imported stay ' +
@@ -1340,7 +1399,8 @@ export default {
       const ready = (this.s.range ? this.s.range.shots : [])
         .filter((sh) => (sh.grabbed || []).length && sh.shotMeta)
       if (!ready.length) {
-        this.s.message = 'Nothing to send — grab V1 across the range first.'
+        const anchor = this.s.range ? this.s.range.anchorTrack : null
+        this.s.message = 'Nothing to send — grab V' + (anchor || '1') + ' across the range first.'
         return
       }
       if (!(await this.ensureProjectToken())) return
@@ -1402,7 +1462,7 @@ export default {
           if (chk.exists) clashes.push(...(chk.files || []))
         }
         if (clashes.length) {
-          const ok = window.confirm(
+          const ok = await this.askConfirm(
             'These plate files already exist:\n\n' + clashes.join('\n') +
             '\n\nOverwrite them?\n(Cancel to add a name prefix/suffix, then Send again.)'
           )
@@ -1497,15 +1557,16 @@ export default {
       try {
         const d = await api.getAeStatus()
         const paths = d.searched && d.searched.length ? d.searched.join('\n') : '(none found)'
-        window.alert(
-          'After Effects not found.\n\nPlatform: ' +
+        this.showNotice(
+          'After Effects not found',
+          'Platform: ' +
             d.platform +
             '\n\nSearched:\n' +
             paths +
             "\n\nInstall After Effects, or tell me where it lives and I'll add that path."
         )
       } catch (e) {
-        window.alert('Could not read AE diagnostics: ' + e.message)
+        this.showNotice('AE diagnostics', 'Could not read AE diagnostics: ' + e.message)
       }
     }
   }
@@ -1513,6 +1574,19 @@ export default {
 </script>
 
 <style scoped>
+.ae-modal-scrim {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.55); padding: 24px;
+}
+.ae-modal {
+  background: var(--panel-1); border: 1px solid var(--line);
+  border-radius: var(--r-panel); padding: 18px 20px;
+  max-width: 520px; width: 100%; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.ae-modal-title { font-family: var(--font-display); color: var(--ink); font-size: 15px; margin-bottom: 8px; }
+.ae-modal-body { color: var(--ink-2); white-space: pre-wrap; font-size: 13px; line-height: 1.5; }
+.ae-modal-actions { margin-top: 16px; justify-content: flex-end; }
 .jobs { display: flex; flex-direction: column; gap: 8px; }
 .job {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;

@@ -158,7 +158,9 @@ Summary of what exists and what it changed:
   window instead of a Terminal transcript, an app icon, and an **Uninstall
   AEBridge.app** shipped beside it. `installer/` now mirrors their four-file
   layout exactly. All three artifacts (installer, uninstaller, DMG) are
-  notarized and stapled.
+  notarized and stapled. **The interactive install path is VERIFIED
+  (2026-08-07)** — dialogs, progress window and admin prompt all confirmed
+  working by running the real DMG.
 
 **Two lessons from that work worth not relearning:**
 
@@ -206,12 +208,29 @@ Implemented but **NOT YET RUN IN AVID** — test these three first:
 `UI_BUILD` is now `2026-08-06.5 · remove Probe commands button`.
 
 **Likely next tasks — confirm priority with the user first:**
-1. **Test range auto-solo and scratch auto-select against real Avid** — both
-   are implemented and unit-reasoned but have never been run against a live
-   sequence. Do this before anything else below.
-2. **Why `frame_count` reads 0** for some shots (see FIXED note above) — the
-   validation gate no longer blocks on it, but the root cause in `grabShot()`
-   is still unexplained.
+1. ~~Test range auto-solo~~ — **VERIFIED IN AVID 2026-08-07, works.**
+   **Scratch auto-select on Send (`s.autoSelectScratch`) is still
+   unconfirmed** — it was not part of that test, so it remains
+   implemented-but-unverified.
+2. ~~Why `frame_count` reads 0~~ — **ROOT-CAUSED AND FIXED 2026-08-07.** It
+   was never "some shots": **every plate ever grabbed** was 0 (all 19 sidecars
+   in `~/Desktop/AEBridge/plates`, 100%). Avid's `Duration` column is
+   **right-aligned** — a 427-frame plate reads `17:19`, i.e. 17 seconds and 19
+   frames — and `tcToFrames` returns 0 for anything with fewer than four
+   fields. The old chain was `durTC ? tcToFrames(durTC) : (end - start)`, so a
+   present-but-short Duration **shadowed the end−start fallback that would
+   have worked**. Fixed by ordering most-reliable-first and giving durations
+   their own right-aligned parser (`src/utils/api/timecode.mjs`,
+   `yarn test:tc`). Confirmed against three agreeing sources: Start/End
+   (427), `Duration` `17:19` (427), and the exported `.mov` via the native
+   probe (427).
+   **Consequence to watch:** this switches ON the return-validation
+   frame-count gate, which had never once run (`service/media.py` skips it
+   when expected <= 0, and expected was always 0). The two renders on disk
+   whose plates still exist match their plates exactly, so it should pass —
+   but a live Send → render → Import is the real test, and a mismatch now
+   BLOCKS an import that previously sailed through. `grabShot()` logs
+   `frame_count unresolved` if it ever lands on 0 again.
 3. **A real Avid return through the native probe** — return-validation itself
    (rate/resolution/frame-count check on the AE render) is still unverified
    end to end; the probe's numbers were checked against ffprobe on existing
