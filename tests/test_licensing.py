@@ -2,6 +2,8 @@
 import base64
 import json
 import os
+import shutil
+import tempfile
 import unittest
 from unittest.mock import patch
 from cryptography.hazmat.primitives import hashes
@@ -17,7 +19,16 @@ class LicenseTests(unittest.TestCase):
         self.key = ec.generate_private_key(ec.SECP256R1())
         numbers = self.key.public_key().public_numbers()
         self.jwk = json.dumps({'kty': 'EC', 'crv': 'P-256', 'x': encode(numbers.x.to_bytes(32, 'big')), 'y': encode(numbers.y.to_bytes(32, 'big'))})
-        self.environment = patch.dict(os.environ, {'AEBRIDGE_LICENSE_PUBLIC_JWK': self.jwk}, clear=True)
+        # File credential backend in a throwaway dir: never read the developer's
+        # real Keychain (or, through it, call the production license service).
+        support = tempfile.mkdtemp(prefix='aebridge_license_test_')
+        self.addCleanup(shutil.rmtree, support, True)
+        self.environment = patch.dict(os.environ, {
+            'AEBRIDGE_LICENSE_PUBLIC_JWK': self.jwk,
+            'AEBRIDGE_LICENSE_ENV': 'local',
+            'AEBRIDGE_LICENSE_CREDENTIAL_BACKEND': 'file',
+            'AEBRIDGE_LICENSE_SUPPORT_DIR': support,
+        }, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
 

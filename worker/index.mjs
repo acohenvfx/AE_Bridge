@@ -1,7 +1,13 @@
-const INSTALLER_KEY = 'beta/AEBridge-1.0.0.dmg'
-const INSTALLER_NAME = 'AEBridge-1.0.0.dmg'
-const CHECKSUM_KEY = 'beta/AEBridge-1.0.0.dmg.sha256'
-const CHECKSUM_NAME = 'AEBridge-1.0.0.dmg.sha256'
+// The installer name follows package.json's version so a release bump can't
+// leave the beta download pointing at the previous DMG. The matching
+// beta/AEBridge-<version>.dmg (+ .sha256) must be in BETA_DOWNLOADS before
+// this Worker deploys, or the download 404s.
+import pkg from '../package.json' with { type: 'json' }
+
+const INSTALLER_NAME = `AEBridge-${pkg.version}.dmg`
+const INSTALLER_KEY = `beta/${INSTALLER_NAME}`
+const CHECKSUM_NAME = `${INSTALLER_NAME}.sha256`
+const CHECKSUM_KEY = `beta/${CHECKSUM_NAME}`
 
 async function betaDownload(request, env, key, name, contentType) {
   if (request.method !== 'GET' && request.method !== 'HEAD') {

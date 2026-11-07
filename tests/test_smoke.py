@@ -20,6 +20,16 @@ os.environ["AEBRIDGE_EDL_ROOT"] = str(Path(_TMP) / "edl")
 os.environ["AEBRIDGE_TEMPLATE_ROOT"] = str(Path(_TMP) / "templates")
 os.environ["AEBRIDGE_AEP_WORK_ROOT"] = str(Path(_TMP) / "aep_work")
 
+# The /v1/aebridge routes are license-gated. These tests exercise the route
+# contract, not licensing (that's test_licensing.py), so opt out of
+# enforcement and point credential storage at an empty sandbox file. Without
+# the file backend the gate reads the developer's REAL Keychain and, if it
+# finds credentials, calls the production license service on every request.
+os.environ["AEBRIDGE_LICENSE_ENFORCED"] = "0"
+os.environ["AEBRIDGE_LICENSE_ENV"] = "local"
+os.environ["AEBRIDGE_LICENSE_CREDENTIAL_BACKEND"] = "file"
+os.environ["AEBRIDGE_LICENSE_SUPPORT_DIR"] = str(Path(_TMP) / "license")
+
 from fastapi.testclient import TestClient  # noqa: E402
 
 _RawTestClient = TestClient
