@@ -26,10 +26,19 @@
 // requires), but it does mean the public URL's headers may change.
 {
   "name": "ae-bridge",
-  "compatibility_date": "2026-08-05",
+  "main": "./worker/index.mjs",
+  "compatibility_date": "2026-08-21",
   "assets": {
     // `yarn generate:release` / `build:cloudflare` output. Contains
     // app/index.html (what the panel loads), _nuxt/* and the SPA fallback.
-    "directory": "./dist/html"
-  }
+    "directory": "./dist/html",
+    "binding": "ASSETS",
+    "run_worker_first": ["/download/*"]
+  },
+  "r2_buckets": [
+    {
+      "binding": "BETA_DOWNLOADS",
+      "bucket_name": "aebridge-beta-downloads"
+    }
+  ]
 }

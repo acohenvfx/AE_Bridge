@@ -8,6 +8,7 @@ dist/
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 .venv/
 venv/
 env/
@@ -19,3 +20,11 @@ element/
 
 # PyInstaller build venv (ota/build-helper.sh)
 .helper-build-venv/
+
+# Local scratch, per-arch helper build trees, Office lock files
+tmp/
+.helper-build-*/
+~$*
+
+# Demo recordings are large binaries; keep them out of git history
+demos/*.mp4

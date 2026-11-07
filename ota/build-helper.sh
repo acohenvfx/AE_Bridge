@@ -90,8 +90,7 @@ source "$VENV_DIR/bin/activate"
 
 echo "Installing dependencies..."
 pip install --upgrade pip >/dev/null
-pip install -r requirements.txt
-pip install pyinstaller
+pip install -r requirements-lock.txt
 
 echo "Running PyInstaller..."
 # Not PyInstaller's default ./build work directory: this repo's panel build

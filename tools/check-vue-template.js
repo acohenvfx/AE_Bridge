@@ -22,7 +22,7 @@ function walk(node) {
       }
     }
   }
-  ;(node.children || []).forEach(walk)
+  (node.children || []).forEach(walk)
   ;(node.ifConditions || []).forEach((cc) => { if (cc.block !== node) walk(cc.block) })
 }
 walk(r.ast)

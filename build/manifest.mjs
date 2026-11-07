@@ -13,6 +13,11 @@ const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'))
 
 const isRelease = process.env.AEB_RELEASE === '1'
 const custom = process.env.APP_URL
+const panelVersion = (process.env.AEBRIDGE_PANEL_VERSION || pkg.version || '0.0.1').trim()
+
+if (!/^\d+\.\d+\.\d+$/.test(panelVersion)) {
+  throw new Error(`AEBRIDGE_PANEL_VERSION must be MAJOR.MINOR.PATCH (got ${panelVersion})`)
+}
 
 // The helper always runs locally, so its origins must stay allowed no matter
 // where the UI itself is served from — a remotely-hosted panel still calls
@@ -52,7 +57,7 @@ const label = suffix ? `AEBridge ${suffix}` : 'AEBridge'
 const manifest = {
   category: 'suite-plugin',
   name: slug ? `com.acohenvfx.aebridge${slug}` : 'com.acohenvfx.aebridge',
-  version: pkg.version || '0.0.1',
+  version: panelVersion,
   displayName: label,
   description:
     'One-click round-trip between Avid Media Composer and After Effects for temp titles, graphics, and quick element comps.',
@@ -96,4 +101,5 @@ writeFileSync(resolve(outDir, 'avid-manifest.json'), JSON.stringify(manifest, nu
 copyFileSync(resolve(ROOT, 'src/static/application.svg'), resolve(outDir, 'static/application.svg'))
 
 console.log(`manifest: ${isRelease ? 'release' : custom ? 'custom' : 'dev'} profile -> ${url}`)
+console.log(`  version ${panelVersion}`)
 console.log(`  wrote ${resolve(outDir, 'avid-manifest.json')}`)

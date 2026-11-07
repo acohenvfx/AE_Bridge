@@ -1,8 +1,9 @@
 // Pure EDL helpers shared by the Avid-facing timeline code and regression tests.
+import { EDL_PRESET_NAME } from './edlPreset.mjs'
 
 export function preferredEdlSetting(names) {
   const clean = (names || []).map((name) => String(name || '').trim()).filter(Boolean)
-  return clean.find((name) => name.toLowerCase() === 'vfx toolkit edl') || ''
+  return clean.find((name) => name.toLowerCase() === EDL_PRESET_NAME.toLowerCase()) || ''
 }
 
 export function normalizedVideoTrack(value) {

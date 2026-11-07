@@ -2,12 +2,19 @@
 rather than a raw 404 when a route/feature is missing."""
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 
 from ..config import FEATURE_IDS, HELPER_VERSION, MIN_PANEL_VERSION, settings
 from ..models import VersionResponse
+from ..auth import set_session_cookie
 
 router = APIRouter()
+
+
+@router.get("/v1/session")
+def session(response: Response) -> dict:
+    set_session_cookie(response)
+    return {"ok": True}
 
 
 @router.get("/v1/version", response_model=VersionResponse)

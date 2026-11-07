@@ -5,17 +5,31 @@ Standalone product; own helper on its own port (config.HELPER_PORT, default
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .config import DEV_ORIGINS, settings
+from .config import DEV_ORIGINS, HELPER_VERSION, settings
 from .integrations import ae
-from .routers import aebridge, ui, ui_proxy, version
+from .routers import aebridge, licensing, ui, ui_proxy, version
 from .routers.ui import DIST_HTML
 from .watcher import watcher
 
-app = FastAPI(title="AEBridge Helper", version="0.0.1")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    settings.roots.ensure()
+    settings.ae_version = ae.detect_ae_version()
+    watcher.start()  # watch for AE renders coming back
+    try:
+        yield
+    finally:
+        watcher.stop()
+
+
+app = FastAPI(title="AEBridge Helper", version=HELPER_VERSION, lifespan=lifespan)
 
 # In release the panel is served BY the helper (same-origin, no CORS needed).
 # In dev the Nuxt panel runs on :3010 and calls the helper cross-origin, so
@@ -25,28 +39,19 @@ app.add_middleware(
     allow_origins=DEV_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 # API routers first so /v1, /app, /healthz always win over the static mount.
 app.include_router(version.router)
+app.include_router(licensing.router)
+app.include_router(licensing.page_router)
 app.include_router(aebridge.router)
 # Local UI and hosted-UI proxy are mutually exclusive: the proxy is a catch-all
 # and would otherwise shadow (or be shadowed by) the local /app route. With
 # AEBRIDGE_UI_ORIGIN unset this is exactly the old behaviour.
 if not ui_proxy.UI_ORIGIN:
     app.include_router(ui.router)
-
-
-@app.on_event("startup")
-def _startup() -> None:
-    settings.roots.ensure()
-    settings.ae_version = ae.detect_ae_version()
-    watcher.start()  # watch for AE renders coming back
-
-
-@app.on_event("shutdown")
-def _shutdown() -> None:
-    watcher.stop()
 
 
 @app.get("/healthz")

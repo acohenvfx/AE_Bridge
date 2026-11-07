@@ -7,6 +7,9 @@ const pkg = require('./package.json')
 const isRelease = process.env.AEB_RELEASE === '1'
 
 export default {
+  // Release builds are static artifacts; disable Nuxt's repository telemetry
+  // so CI never inspects or transmits project metadata.
+  telemetry: false,
   ssr: false,
   target: 'static',
   srcDir: 'src/',
@@ -25,14 +28,23 @@ export default {
     // In dev the panel talks to the helper cross-origin (3010 -> 8010).
     // In release the panel is served BY the helper, so same-origin ('').
     HELPER_URL: process.env.HELPER_URL || (isRelease ? '' : 'http://127.0.0.1:8010'),
-    APP_URL: process.env.APP_URL || 'http://localhost:3010/app',
     PANEL_VERSION: pkg.version || '0.0.1'
   },
 
   generate: { dir: 'dist/html' },
 
+  // Keep generation deterministic in locked-down build runners. Nuxt 2's
+  // generator briefly starts a local server; it must never bind all
+  // interfaces just to produce static files.
+  server: {
+    host: process.env.NUXT_HOST || '127.0.0.1',
+    port: Number(process.env.NUXT_PORT || 3010)
+  },
+
   build: {
-    // Nuxt 2 / webpack 4 needs the legacy OpenSSL provider on Node 17+.
-    // (On Node 16 this is a no-op.)
+    // The generated MCAPI bindings exceed Babel's 500 KB auto-compact
+    // threshold. Compact them explicitly so a healthy RC build is not logged
+    // as an error-like deoptimisation warning.
+    babel: { compact: true }
   }
 }

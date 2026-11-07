@@ -38,11 +38,23 @@ const track = (number, selected = false) => ({
 }
 
 {
-  // A single selected track still narrows to just itself.
+  // Regression: Media Composer commonly leaves only V1 highlighted. That is
+  // normal ambient editor state, not an explicit request to hide V2/V3 from
+  // Analyze Stack and Analyze Range.
+  const all = [track(1, true), track(2), track(3)]
+  assert.deepEqual(
+    narrowToSelection(all).map((t) => t.number),
+    [1, 2, 3]
+  )
+}
+
+{
+  // The same rule applies to a lone upper-track highlight: one selection is
+  // ambiguous, so the safe default is the complete picture stack.
   const all = [track(1), track(2, true), track(3)]
   assert.deepEqual(
     narrowToSelection(all).map((t) => t.number),
-    [2]
+    [1, 2, 3]
   )
 }
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProjectMode(str, Enum):
@@ -153,12 +153,11 @@ class Sidecar(BaseModel):
     project_mode: ProjectMode
     aep_path: str
     aep_comp_name: str
-    plates: list[PlateRef] = []
+    plates: list[PlateRef] = Field(default_factory=list)
     version: int = 1
     created: str
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class ValidationReport(BaseModel):
@@ -176,6 +175,7 @@ class JobView(BaseModel):
     job_id: str
     state: JobState
     project_mode: ProjectMode
+    auto_swap: bool = False
     # The shot this job is for. The panel groups jobs and render files by it,
     # so the editor sees shots rather than two parallel lists of internals.
     shot_name: Optional[str] = None
@@ -195,7 +195,7 @@ class JobView(BaseModel):
 
 
 class RenderFile(BaseModel):
-    """A media file sitting in the shared render folder.
+    """A media file sitting in a job-scoped render folder.
 
     AE can render several versions out of one comp, and only the first gets
     matched to its job — so the folder is listed in full and anything not yet

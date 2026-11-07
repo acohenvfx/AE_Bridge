@@ -7,6 +7,9 @@ which is a deliberate user authorization surfaced only via an opaque token.
 from __future__ import annotations
 
 from pathlib import Path
+import re
+
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 class PathNotAllowed(ValueError):
@@ -33,6 +36,12 @@ def ensure_within(path: str | Path, roots: list[Path]) -> Path:
         if is_within(p, root):
             return p
     raise PathNotAllowed(f"path escapes allowed roots: {p}")
+
+
+def validate_job_id(value: str) -> str:
+    if not isinstance(value, str) or not _JOB_ID_RE.fullmatch(value):
+        raise ValueError("job_id must be 1-128 path-safe characters")
+    return value
 
 
 def validate_aep_selection(path: str | Path) -> Path:

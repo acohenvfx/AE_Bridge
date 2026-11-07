@@ -11,6 +11,7 @@
         </div>
       </div>
       <div class="eb-tool-head-r">
+        <a class="eb-btn eb-btn--ghost eb-btn--mini" href="http://127.0.0.1:8010/license/" target="_blank" rel="noopener">Activate / License</a>
         <!-- ONE rolled-up status pill instead of three per-service ones: the
              identity bar should say "is the bridge live?", not enumerate
              subsystems. Specifics stay in the tooltip and in Diagnostics. -->
@@ -69,7 +70,7 @@
             <button
               class="eb-btn eb-btn--ghost eb-btn--mini"
               :disabled="s.rangeAnalyzing"
-              title="Use the sequence's IN/OUT marks: one shot per anchor-track clip in the range (normally V1 — select other track heads first to analyze only those), each with its own plate stack"
+              title="Use the sequence's IN/OUT marks: one shot per anchor-track clip in the range (normally V1 — select two or more track heads to analyze only that subset), each with its own plate stack"
               @click="doAnalyzeRange"
             >{{ s.rangeAnalyzing ? 'Reading range…' : 'Analyze range' }}</button>
             <label v-if="s.stack.length" class="eb-chip" :class="{ 'is-on': s.autoGrab }" :title="'Grab each plate automatically as you solo its track in the Avid timeline'">
@@ -437,7 +438,7 @@
                  Avid accepts the command but the enable state never moves. Kept
                  here (not in the grab flow) so it can be retested cheaply. -->
             <button
-              v-if="s.inAvid && s.stack.length && nextTrack !== null"
+              v-if="s.inAvid && s.avidHost.commandAutomation && s.stack.length && nextTrack !== null"
               class="eb-btn eb-btn--ghost eb-btn--mini"
               :disabled="grabbingAll || s.grabbingTrack !== null"
               title="Experimental: have Avid solo each track, verify its enable state, and restore the original state. Run with the timeline focused; logs a full before/after diagnosis."
@@ -502,10 +503,11 @@ import { aebridge as state } from '~/store/toolState'
 import * as api from '~/utils/api/aebridge'
 import * as tl from '~/utils/api/timeline'
 import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
+import { hostCapabilities } from '~/utils/api/hostCapabilities.mjs'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-08-07.1 · fix frame_count always 0'
+const UI_BUILD = '2026-08-18.2 · auto-grab starts off'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -597,10 +599,11 @@ export default {
     // The identity bar answers one question: is the bridge live? Anything
     // that is NOT fine gets named, because that's the actionable case.
     statusOk() {
-      return this.s.inAvid && this.s.helper.online && this.s.ae.found
+      return this.s.inAvid && this.s.avidHost.fullSupport && this.s.helper.online && this.s.ae.found
     },
     statusSummary() {
       if (!this.s.inAvid) return 'Not in Media Composer'
+      if (!this.s.avidHost.fullSupport) return 'Media Composer 2025.12.1+ required'
       if (!this.s.helper.online) return 'Helper offline'
       if (!this.s.ae.found) return 'After Effects not found'
       return 'Helper & AE ready · MCAPI live'
@@ -611,6 +614,7 @@ export default {
         this.s.helper.online ? 'helper v' + this.s.helper.version : 'helper offline',
         this.s.ae.found ? 'AE ' + this.s.ae.version : 'AE not found — click for diagnostics',
         this.s.inAvid ? 'MCAPI live' : 'MCAPI unavailable',
+        this.s.inAvid ? 'Media Composer ' + (this.s.avidHost.appVersion || 'unknown') + ' · SDK ' + (this.s.avidHost.sdkVersion || 'unknown') : '',
         'UI ' + this.uiBuild,
       ]
       return bits.join('\n')
@@ -655,8 +659,22 @@ export default {
   },
   async mounted() {
     logMcapiVerbose('UI build', { build: UI_BUILD })
+    // Never carry an armed auto-grab state into a newly opened panel. These
+    // controls are intentionally session-only; the editor opts in each time.
+    this.s.autoGrab = false
+    this.s.autoGrabRange = false
     this.restorePrefs()
     this.s.inAvid = tl.mcapiAvailable()
+    if (this.s.inAvid) {
+      try {
+        const host = await tl.getAvidHostInfo()
+        this.s.avidHost = { ...host, ...hostCapabilities(host.appVersion) }
+        logMcapiVerbose('Avid host', this.s.avidHost)
+      } catch (e) {
+        this.s.avidHost = { appVersion: '', sdkVersion: '', fullSupport: false, commandAutomation: false }
+        logMcapiVerbose('Avid host detection failed', e.message)
+      }
+    }
     await this.refreshVersion()
     await this.refreshTemplates()
     await this.refreshJobs()
@@ -702,8 +720,8 @@ export default {
     's.pollPaused'(v) { this.savePref('pollPaused', v ? '1' : '0'); if (!v) this.wakePolling() },
     // Turning auto-grab on must restore a responsive poll, or it could sit in
     // the slow lane and take seconds to notice a soloed track.
-    's.autoGrab'(v) { this.savePref('autoGrab', v ? '1' : '0'); if (v) this.wakePolling() },
-    's.autoGrabRange'(v) { this.savePref('autoGrabRange', v ? '1' : '0'); if (v) this.wakePolling() },
+    's.autoGrab'(v) { if (v) this.wakePolling() },
+    's.autoGrabRange'(v) { if (v) this.wakePolling() },
     's.autoSelectScratch'(v) { this.savePref('autoSelectScratch', v ? '1' : '0') }
   },
   methods: {
@@ -733,14 +751,15 @@ export default {
         if (g('prefix') != null) this.s.prefix = g('prefix')
         if (g('suffix') != null) this.s.suffix = g('suffix')
         if (g('projectMode')) this.s.projectMode = g('projectMode')
-        if (g('projectPath') != null) this.s.projectPath = g('projectPath')
+        if (g('projectPath') != null) {
+          this.s.projectPath = ''
+          this.savePref('projectPath', '')
+        }
         if (g('projectLabel') != null) this.s.projectLabel = g('projectLabel')
         // v2 key: the old one may hold a stale "collapsed" from when the log
         // defaulted shut, which would override the new default.
         if (g('logOpen.v2') != null) this.s.logOpen = g('logOpen.v2') === '1'
         if (g('settingsOpen') != null) this.s.settingsOpen = g('settingsOpen') === '1'
-        if (g('autoGrab') != null) this.s.autoGrab = g('autoGrab') === '1'
-        if (g('autoGrabRange') != null) this.s.autoGrabRange = g('autoGrabRange') === '1'
         if (g('autoSelectScratch') != null) this.s.autoSelectScratch = g('autoSelectScratch') === '1'
         if (g('pollPaused') != null) this.s.pollPaused = g('pollPaused') === '1'
       } catch (e) {}
@@ -1203,7 +1222,8 @@ export default {
     setMode(mode) {
       this.s.projectMode = mode
       this.s.projectToken = null
-      // keep projectPath/label so a remembered project survives a mode toggle
+      // Keep the label so the editor can see the last choice; the path remains
+      // helper-owned and must be picked again after a restart.
     },
     async choose() {
       this.picking = true
@@ -1213,8 +1233,10 @@ export default {
           : await api.pickProject()
         this.s.projectToken = r.target_project_token
         this.s.projectLabel = r.label
-        this.s.projectPath = r.path || ''
-        this.savePref('projectPath', this.s.projectPath)
+        // Project paths stay inside the helper. A restart requires a fresh
+        // native picker rather than persisting editorial paths in the panel.
+        this.s.projectPath = ''
+        this.savePref('projectPath', '')
         this.savePref('projectLabel', this.s.projectLabel)
       } catch (e) {
         this.s.projectLabel = 'cancelled / unavailable'
@@ -1428,17 +1450,6 @@ export default {
     // re-register it for a fresh token so the last project sticks.
     async ensureProjectToken() {
       if (this.s.projectMode !== 'existing_project' || this.s.projectToken) return true
-      if (this.s.projectPath) {
-        try {
-          const r = await api.pickProject(this.s.projectPath)
-          this.s.projectToken = r.target_project_token
-          this.s.projectLabel = r.label
-          return true
-        } catch (e) {
-          this.s.message = 'Saved project not found (' + (this.s.projectLabel || this.s.projectPath) + ') — Choose .aep… again.'
-          return false
-        }
-      }
       this.s.message = 'Choose a project first (Choose .aep…), or switch to New project per shot.'
       return false
     },

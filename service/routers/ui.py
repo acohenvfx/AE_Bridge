@@ -15,6 +15,8 @@ from pathlib import Path
 from fastapi import APIRouter, Response
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
+from ..auth import set_session_cookie
+
 router = APIRouter()
 
 def _bundle_base() -> Path | None:
@@ -61,4 +63,6 @@ def app_page() -> Response:
         return PlainTextResponse(
             "AEBridge UI not built. Run `yarn generate:release`.", status_code=404
         )
-    return HTMLResponse(page.read_text(), headers={"Content-Security-Policy": CSP})
+    response = HTMLResponse(page.read_text(), headers={"Content-Security-Policy": CSP})
+    set_session_cookie(response)
+    return response

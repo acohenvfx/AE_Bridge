@@ -18,11 +18,20 @@
 // per track — see the "Avid EDL Exports filename counter" fact).
 
 // `tracks` must already be narrowed to "has content" — this never widens the
-// set, only narrows it further when a subset is selected.
+// set, only narrows it further when an unmistakable multi-track selection is
+// present.
+//
+// Media Composer normally keeps one record-side track head highlighted (most
+// often V1). That is ambient editor state, not a reliable signal that the user
+// wants Analyze to ignore every upper plate. Treating one selected track as a
+// filter regressed both Analyze Stack and Analyze Range to V1-only. Requiring
+// at least two selected video tracks preserves the useful V14-V16 narrowing
+// workflow while the ordinary single-highlight state keeps scanning the full
+// picture stack as it did before selection narrowing was added.
 export function narrowToSelection(tracks) {
   const all = tracks || []
   const selected = all.filter((t) => t.selected)
-  return selected.length ? selected : all
+  return selected.length >= 2 ? selected : all
 }
 
 // The track that names the whole stack: the lowest-numbered track in the

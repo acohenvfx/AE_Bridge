@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { EDL_PRESET_NAME } from '../src/utils/api/edlPreset.mjs'
 
 import {
   clipsForTrack,
@@ -10,7 +11,9 @@ import {
   withPlateSuffix,
 } from '../src/utils/api/edlPlan.mjs'
 
-assert.equal(preferredEdlSetting(['Default Change List', 'VFX toolkit edl']), 'VFX toolkit edl')
+assert.equal(preferredEdlSetting(['Default Change List', EDL_PRESET_NAME]), EDL_PRESET_NAME)
+assert.equal(preferredEdlSetting(['Default EDL', 'VFX toolkit edl']), '')
+assert.equal(preferredEdlSetting([' ' + EDL_PRESET_NAME.toUpperCase() + ' ']), EDL_PRESET_NAME.toUpperCase())
 assert.equal(preferredEdlSetting(['Default Change List', 'SHOTGUN EDL VFX']), '')
 assert.equal(normalizedVideoTrack('V'), 1)
 assert.equal(normalizedVideoTrack('v2'), 2)

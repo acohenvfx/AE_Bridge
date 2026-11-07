@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AE Bridge License</title>
+    <link rel="stylesheet" href="/license/license.css" />
+    <script src="/license/license.js" defer></script>
+  </head>
+  <body>
+    <main class="license-shell">
+      <header class="brand-row">
+        <a class="back-link" href="/app/" aria-label="Return to AE Bridge">← Panel</a>
+        <p class="brand">Elemental <strong>Bender</strong></p>
+      </header>
+
+      <section class="license-workspace" aria-labelledby="license-title">
+        <div class="license-heading">
+          <p class="eyebrow">License</p>
+          <h1 id="license-title">This Mac</h1>
+          <p id="status-copy" class="status-copy" aria-live="polite">Checking license…</p>
+        </div>
+
+        <div class="state-line" aria-live="polite">
+          <span id="state-dot" class="state-dot is-loading" aria-hidden="true"></span>
+          <span id="state-label">Checking</span>
+        </div>
+
+        <form id="activation-form" class="activation-form" hidden>
+          <label for="activation-code">Activation code</label>
+          <div class="activation-row">
+            <input
+              id="activation-code"
+              name="activationCode"
+              type="text"
+              inputmode="text"
+              autocomplete="off"
+              autocapitalize="characters"
+              spellcheck="false"
+              maxlength="128"
+              placeholder="XXXX-XXXX-XXXX"
+              required
+            />
+            <button id="activate-button" class="primary-button" type="submit">Activate</button>
+          </div>
+          <p class="field-help">Create a code in your <a href="https://pragmaticfox.com/account/" target="_blank" rel="noopener">Pragmatic Fox account</a>, then paste it here.</p>
+        </form>
+
+        <dl id="license-details" class="license-details" hidden>
+          <div>
+            <dt>Plan status</dt>
+            <dd id="plan-value">—</dd>
+          </div>
+          <div>
+            <dt>Offline access until</dt>
+            <dd id="expiry-value">—</dd>
+          </div>
+          <div>
+            <dt>Device</dt>
+            <dd id="device-value">—</dd>
+          </div>
+        </dl>
+
+        <div id="device-actions" class="device-actions" hidden>
+          <button id="refresh-button" class="primary-button" type="button">Refresh license</button>
+          <button id="deactivate-button" class="text-button" type="button">Deactivate this Mac</button>
+        </div>
+
+        <p id="message" class="message" role="alert" hidden></p>
+      </section>
+
+      <footer>
+        License credentials stay in macOS Keychain. No project or media information is sent.
+      </footer>
+    </main>
+  </body>
+</html>

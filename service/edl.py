@@ -12,12 +12,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 _TC = r"\d{2}:\d{2}:\d{2}[:;]\d{2}"
-# 001  AX  V  C  <srcIn> <srcOut> <recIn> <recOut>
+# Ordinary cut:
+# 001  AX  V  C      <srcIn> <srcOut> <recIn> <recOut>
+# Effect/key rows add one field after the edit code:
+# 001  AX  V  K 000  <srcIn> <srcOut> <recIn> <recOut>
 _EVENT = re.compile(
-    rf"^\s*(\d+)\s+(\S+)\s+([AVB][/\dAV]*)\s+(\S+)\s+({_TC})\s+({_TC})\s+({_TC})\s+({_TC})"
+    rf"^\s*(\d+)\s+(\S+)\s+([AVB][/\dAV]*)\s+(\S+)(?:\s+(\S+))?\s+"
+    rf"({_TC})\s+({_TC})\s+({_TC})\s+({_TC})"
 )
 _FROM_CLIP = re.compile(r"^\*\s*FROM CLIP NAME:\s*(.+?)\s*$", re.IGNORECASE)
-_CLIP_NAME = re.compile(r"^\*\s*(?:CLIP NAME|TO CLIP NAME):\s*(.+?)\s*$", re.IGNORECASE)
+_CLIP_NAME = re.compile(
+    r"^\*\s*(?:CLIP NAME|TO CLIP NAME|KEY CLIP NAME):\s*(.+?)\s*$",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -38,10 +45,18 @@ def parse_edl(text: str) -> list[EdlEvent]:
     for line in text.splitlines():
         m = _EVENT.match(line)
         if m:
+            # Avid represents segment effects such as 3D Warp as two K rows:
+            # a synthetic black-fill background (`BL ... K B`) followed by
+            # the actual source (`<reel> ... K 000`). Only the source is a
+            # timeline clip; retaining BL would win point containment first
+            # and hide the real media underneath it.
+            if m.group(2).upper() == "BL" and m.group(4).upper() == "K" and m.group(5).upper() == "B":
+                last = None
+                continue
             last = EdlEvent(
                 num=m.group(1), reel=m.group(2), track=m.group(3),
-                src_in=m.group(5), src_out=m.group(6),
-                rec_in=m.group(7), rec_out=m.group(8),
+                src_in=m.group(6), src_out=m.group(7),
+                rec_in=m.group(8), rec_out=m.group(9),
             )
             events.append(last)
             continue

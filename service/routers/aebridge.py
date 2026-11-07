@@ -7,6 +7,7 @@ helper's own native dialog, which returns a token).
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,9 +71,9 @@ def _resolve_exported_reference(
             chosen, stable = cand, 0
         last_size = size
         time.sleep(interval)
-    return chosen  # best effort at timeout
+    return None
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..config import settings
 from ..integrations import ae, macos, mcapi
@@ -107,8 +108,12 @@ from ..paths import (
     validate_aep_selection,
 )
 from ..media import MediaProbeError, probe_video, validate_video
+from ..auth import require_session
+from ..paths import validate_job_id
 
-router = APIRouter(prefix="/v1/aebridge")
+from .licensing import require_license
+
+router = APIRouter(prefix="/v1/aebridge", dependencies=[Depends(require_session), Depends(require_license)])
 
 
 # --- templates -------------------------------------------------------------
@@ -158,6 +163,12 @@ def _delete_scratch_edl(path: Path) -> None:
     failed delete must never fail the parse response — the clip data is
     already extracted and the caller needs it regardless.
     """
+    # Local diagnosis only: retain the helper-owned archived copy so the exact
+    # List Tool output can be inspected. Release helpers never set this flag,
+    # and therefore keep deleting scratch EDLs to protect Avid's 001-999
+    # filename counter.
+    if os.environ.get("AEBRIDGE_KEEP_EDL") == "1":
+        return
     try:
         ensure_within(path, [AVID_GENERATED_EDL_ROOT, settings.roots.edl_root])
     except PathNotAllowed:
@@ -175,8 +186,11 @@ def parse_edl(req: ParseEdlRequest) -> ParseEdlResponse:
     record in/out — used to enumerate the V1 clips in the marked range."""
     path = Path(req.edl_path).expanduser()
     try:
+        path = ensure_within(path, [AVID_GENERATED_EDL_ROOT, settings.roots.edl_root])
         path = archive_generated_edl(path, settings.roots.edl_root)
         events = edl_parser.read_and_parse(path, req.rec_in, req.rec_out, req.fps)
+    except PathNotAllowed as e:
+        raise HTTPException(status_code=400, detail=f"EDL outside allowed roots: {e}") from e
     except FileNotFoundError:
         raise HTTPException(status_code=400, detail=f"EDL not found: {path}")
     _delete_scratch_edl(path)
@@ -227,7 +241,7 @@ def pick_project(path: Optional[str] = None) -> PickProjectResponse:
     except PathNotAllowed as e:
         raise HTTPException(status_code=400, detail=str(e))
     token = store.register_project(resolved)
-    return PickProjectResponse(target_project_token=token, label=resolved.name, path=str(resolved))
+    return PickProjectResponse(target_project_token=token, label=resolved.name)
 
 
 @router.post("/new-project", response_model=PickProjectResponse)
@@ -242,7 +256,7 @@ def new_project(path: Optional[str] = None) -> PickProjectResponse:
     except PathNotAllowed as e:
         raise HTTPException(status_code=400, detail=str(e))
     token = store.register_project(resolved)
-    return PickProjectResponse(target_project_token=token, label=resolved.name, path=str(resolved))
+    return PickProjectResponse(target_project_token=token, label=resolved.name)
 
 
 # --- prepare (Avid path) ---------------------------------------------------
@@ -257,14 +271,13 @@ def _safe_filename(name: Optional[str]) -> str:
 
 @router.get("/plate-exists")
 def plate_exists(name: str = "") -> dict:
-    """Does a plate with this shot name already exist in the plates folder?
-    The panel uses this to warn before overwriting."""
+    """Does a plate with this name already exist in any job folder?"""
     stem = _safe_filename(name)
     root = settings.roots.export_root
     matches = []
     if root.exists():
         matches = [
-            p.name for p in root.glob("*")
+            str(p.relative_to(root)) for p in root.rglob("*")
             if p.is_file() and p.suffix.lower() in _MEDIA_EXTS and (p.stem == stem or p.stem.startswith(stem))
         ]
     return {"exists": bool(matches), "name": stem, "files": matches}
@@ -272,20 +285,20 @@ def plate_exists(name: str = "") -> dict:
 
 @router.post("/prepare", response_model=PrepareResponse)
 def prepare(req: Optional[PrepareRequest] = None) -> PrepareResponse:
-    """Reserve a job. Flat layout: all plates go in the shared `plates` folder and
-    all AE renders in the shared `render` folder (files named by shot). Path
-    authority stays in the helper."""
+    """Reserve a job and its private plate export directory."""
     stamp = datetime.now().strftime("%Y%m%d")
     base = f"{stamp}_{_sanitize(req.name if req else None)}"
     job_id = base
     n = 2
-    while store.get(job_id) is not None:
+    while (
+        store.get(job_id) is not None
+        or (settings.roots.export_root / job_id).exists()
+        or (settings.roots.watch_root / job_id).exists()
+    ):
         job_id = f"{base}_{n}"
         n += 1
-    plate_dir = settings.roots.export_root  # shared plates folder
+    plate_dir = ensure_within(settings.roots.export_root / job_id, [settings.roots.export_root])
     plate_dir.mkdir(parents=True, exist_ok=True)
-    ensure_within(plate_dir, [settings.roots.export_root])
-    # Base name only — MC's export preset appends its own extension.
     return PrepareResponse(job_id=job_id, export_dir=str(plate_dir), reference_name="ref")
 
 
@@ -328,17 +341,32 @@ def send(req: SendRequest) -> JobView:
         shot = mcapi.get_selected_shot()
 
     job_id = req.job_id or store.new_job_id(shot["shot_name"])
-    job = Job(job_id=job_id, project_mode=req.project_mode)
-    store.add(job)
+    if req.job_id is None:
+        base_job_id = job_id
+        n = 2
+        while (
+            (settings.roots.export_root / job_id).exists()
+            or (settings.roots.watch_root / job_id).exists()
+        ):
+            job_id = f"{base_job_id}_{n}"
+            n += 1
+    try:
+        job_id = validate_job_id(job_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if store.get(job_id) is not None:
+        raise HTTPException(status_code=409, detail=f"job already exists: {job_id}")
+    job = Job(job_id=job_id, project_mode=req.project_mode, auto_swap=req.auto_swap)
 
-    # Flat layout: shared plates folder + shared render folder; files by shot.
+    # Isolate every job. The panel still receives a normal export directory,
+    # but a second shot can never overwrite or be matched to the first one.
     safe_name = _safe_filename(shot["shot_name"]).strip() or "shot"
-    plate_dir = settings.roots.export_root
-    render_dir = settings.roots.watch_root
+    plate_dir = ensure_within(settings.roots.export_root / job_id, [settings.roots.export_root])
+    render_dir = ensure_within(settings.roots.watch_root / job_id, [settings.roots.watch_root])
     plate_dir.mkdir(parents=True, exist_ok=True)
     render_dir.mkdir(parents=True, exist_ok=True)
-    job.watch_dir = render_dir       # AE renders here (shared)
-    job.render_stem = safe_name      # the watcher matches renders by this name
+    job.watch_dir = render_dir
+    job.render_stem = safe_name
 
     # Plate stack: every plate file must live under export_root and be fully
     # written (size-stable) before AE touches it. V1 (order 1) is the base.
@@ -403,7 +431,7 @@ def send(req: SendRequest) -> JobView:
         created=datetime.now(timezone.utc).isoformat(),
     )
 
-    # Render output goes into the shared render folder, named after the shot.
+    # Render output goes into this job's private render folder.
     render_output = str(render_dir / f"{safe_name}.mov")
 
     aep_path, jsx_path = ae.prepare_comp(
@@ -427,6 +455,7 @@ def send(req: SendRequest) -> JobView:
     job.sidecar = sidecar
     # Remember every plate file so the job can report when they're deleted.
     job.plate_paths = [Path(p.file) for p in plates] if plates else [ref_path]
+    store.add(job)
 
     # Actually launch After Effects with the comp so the editor can work.
     try:
@@ -456,8 +485,9 @@ def clear_jobs(all: bool = False) -> dict:
 
 @router.post("/reset")
 def hard_reset() -> dict:
-    """Hard reset: drop every job regardless of state, and forget which renders
-    have been imported. Files on disk are NOT touched — plates and renders stay
+    """Hard reset: drop every job regardless of state.
+
+    Files and imported-render history are NOT touched — plates and renders stay
     put, so anything still wanted can be re-imported from the Renders list.
 
     This is the escape hatch for a queue stuck on jobs nobody is working on."""
@@ -467,7 +497,7 @@ def hard_reset() -> dict:
 
 @router.get("/renders", response_model=list[RenderFile])
 def list_renders() -> list[RenderFile]:
-    """Everything in the shared render folder.
+    """List every media file in the job-scoped render folders.
 
     The watcher only ever matches ONE render per job, so a second or third
     version out of the same comp would otherwise go unnoticed. Listing the
@@ -476,17 +506,23 @@ def list_renders() -> list[RenderFile]:
     root = settings.roots.watch_root
     if not root.exists():
         return []
-    # Map render_stem -> job so a file can name the job it came from.
-    by_stem = {j.render_stem: j for j in store.all() if j.render_stem}
     now = time.time()
     out: list[RenderFile] = []
-    for p in sorted(root.glob("*"), key=lambda x: x.stat().st_mtime if x.exists() else 0, reverse=True):
+    for p in sorted(root.rglob("*"), key=lambda x: x.stat().st_mtime if x.exists() else 0, reverse=True):
         if not (p.is_file() and p.suffix.lower() in _MEDIA_EXTS):
             continue
         st = p.stat()
         if st.st_size <= 0:
             continue
-        job = next((j for stem, j in by_stem.items() if p.stem == stem or p.stem.startswith(stem)), None)
+        job = next(
+            (
+                j for j in store.all()
+                if j.watch_dir
+                and p.parent.resolve() == j.watch_dir.resolve()
+                and (p.stem == j.render_stem or p.stem.startswith(j.render_stem + "_"))
+            ),
+            None,
+        )
         writing = (now - st.st_mtime) < _RENDER_SETTLE_SECS
         out.append(
             RenderFile(
@@ -622,6 +658,15 @@ def mark_imported(job_id: str, req: ImportRequest) -> JobView:
         raise HTTPException(status_code=400, detail=str(e))
     job.return_bin = req.target_bin or _default_return_bin(job)
     if job.state in (JobState.returned, JobState.validated, JobState.offered):
+        if job.auto_swap:
+            if not (job.validation and job.validation.passed):
+                raise HTTPException(status_code=409, detail="auto-swap requires a validated return")
+            assert job.sidecar and job.return_path
+            mcapi.swap_at_record_tc(str(job.return_path), job.sidecar.record_tc_in)
+            mcapi.stamp_version(job.sidecar.shot_name, job.sidecar.version)
+            job.state = JobState.swapped
+            job.transition(JobState.done)
+            return job.view()
         job.state = JobState.done
     return job.view()
 

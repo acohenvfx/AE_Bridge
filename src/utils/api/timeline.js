@@ -12,6 +12,8 @@
 //
 // All calls run in the panel WebView (the mcapi global is injected there).
 import {
+  GetAppInfoRequest,
+  GetAppInfoRequestBody,
   GetViewerMobsRequest,
   GetViewerMobsRequestBody,
   GetMobInfoRequest,
@@ -32,6 +34,8 @@ import {
   GetListOfExportSettingsRequestBody,
   GetListOfExportEDLSettingsRequest,
   GetListOfExportEDLSettingsRequestBody,
+  LoadSettingRequest,
+  LoadSettingRequestBody,
   GetMarkersRequest,
   GetMarkersRequestBody,
   GetListOfCommandsRequest,
@@ -60,10 +64,10 @@ import {
   hasNumberedUpperTracks,
   pickClipForSegment,
   plateNameForTrack,
-  preferredEdlSetting,
   withPlateSuffix,
 } from '~/utils/api/edlPlan.mjs'
 import { recoverEdl } from '~/utils/api/aebridge.js'
+import { createEdlSettingResolver } from '~/utils/api/edlSettings.mjs'
 import { tcToFrames, durationToFrames } from '~/utils/api/timecode.mjs'
 import { narrowToSelection, lowestTrack } from '~/utils/api/trackSelection.mjs'
 
@@ -79,8 +83,26 @@ import {
 
 const EXPORT_RPC_TIMEOUT_MS = 120000
 
+function timecodeFps(shot) {
+  const n = Math.round(Number.parseFloat(shot && shot.frameRate) || 24)
+  return n > 0 ? n : 24
+}
+
 export function mcapiAvailable() {
   return typeof mcapi !== 'undefined' && !!getMcapiClient()
+}
+
+export async function getAvidHostInfo() {
+  const client = requireClient()
+  const req = new GetAppInfoRequest()
+  req.setBody(new GetAppInfoRequestBody())
+  const res = await callUnary(client, 'getAppInfo', req, getAccessTokenMetadata())
+  const body = res && res.getBody ? res.getBody() : null
+  return {
+    appName: body && body.getAppName ? body.getAppName() : '',
+    appVersion: body && body.getAppVersion ? body.getAppVersion() : '',
+    sdkVersion: body && body.getSdkVersion ? body.getSdkVersion() : '',
+  }
 }
 
 function requireClient() {
@@ -228,15 +250,16 @@ export async function getCurrentShot() {
 // the range can be targeted directly.
 export async function analyzeRange({ parseEdl }) {
   const shot = await getCurrentShot()
-  const fps = 24
+  const fps = timecodeFps(shot)
+  const dropFrame = !!shot.dropFrame
   if (!shot.markIn || !shot.markOut) {
     throw new Error('No IN/OUT marks on the record sequence. Mark the range you want, then Analyze range.')
   }
-  const inF = tcToFrames(shot.markIn, fps)
-  const outF = tcToFrames(shot.markOut, fps)
+  const inF = tcToFrames(shot.markIn, fps, dropFrame)
+  const outF = tcToFrames(shot.markOut, fps, dropFrame)
   // Sequence start, for converting absolute EDL timecodes into the
   // sequence-relative frames CreateSubClip's head_frame expects.
-  const seqStartF = tcToFrames(shot.startTC || '00:00:00:00', fps)
+  const seqStartF = tcToFrames(shot.startTC || '00:00:00:00', fps, dropFrame)
   if (!(outF > inF)) {
     throw new Error('Mark OUT (' + shot.markOut + ') is not after Mark IN (' + shot.markIn + ').')
   }
@@ -245,10 +268,11 @@ export async function analyzeRange({ parseEdl }) {
   const withContent = allTracks
     .filter((t) => t.type === TRACKTYPE_PICTURE && t.numSegments > 0)
     .sort((a, b) => a.number - b.number)
-  // Selected track heads narrow the scan the same way analyzeStack does — see
-  // trackSelection.mjs. The ANCHOR (ordinarily V1) is whichever track ends up
-  // lowest after narrowing: its EDL is what defines shot boundaries below
-  // (cuts define shots), and its marker names every shot in the range.
+  // Two or more selected track heads narrow the scan the same way analyzeStack
+  // does — see trackSelection.mjs. One highlighted track is normal Avid state
+  // and must not collapse analysis to V1-only. The ANCHOR (ordinarily V1) is
+  // whichever track ends up lowest after narrowing: its EDL defines shot
+  // boundaries below (cuts define shots), and its marker names every shot.
   const vids = narrowToSelection(withContent)
   const anchor = lowestTrack(vids)
   if (!anchor) {
@@ -285,8 +309,8 @@ export async function analyzeRange({ parseEdl }) {
   // that starts mid-clip still means the editor wants that shot.
   const shots = []
   for (const c of edls[anchor.number] || []) {
-    const cIn = tcToFrames(c.rec_in, fps)
-    const cOut = tcToFrames(c.rec_out, fps)
+    const cIn = tcToFrames(c.rec_in, fps, dropFrame)
+    const cOut = tcToFrames(c.rec_out, fps, dropFrame)
     if (cOut <= inF || cIn >= outF) continue
     // Target position, just inside the clip so clip-bounds subclipping
     // resolves to THIS clip and not a neighbour.
@@ -308,8 +332,8 @@ export async function analyzeRange({ parseEdl }) {
       const picked = pickClipForSegment(
         (edls[t.number] || []).map((x) => ({
           clip: x,
-          in: tcToFrames(x.rec_in, fps),   // absolute
-          out: tcToFrames(x.rec_out, fps), // absolute
+          in: tcToFrames(x.rec_in, fps, dropFrame),   // absolute
+          out: tcToFrames(x.rec_out, fps, dropFrame), // absolute
         })),
         cIn,
         cOut
@@ -329,7 +353,7 @@ export async function analyzeRange({ parseEdl }) {
     }
     shots.push({
       atFrame: atFrameSeq,                // sequence-relative — for head_frame
-      atTC: framesToTc(atFrameAbs, fps),  // absolute — for EDL lookup
+      atTC: framesToTc(atFrameAbs, fps, dropFrame),  // absolute — for EDL lookup
       clipName: c.clip_name,
       recIn: c.rec_in,
       recOut: c.rec_out,
@@ -513,32 +537,26 @@ export function enabledVideoTracks(tracks) {
     .sort((a, b) => a.number - b.number)
 }
 
-let edlSettingsPromise = null
-
-async function getRequiredEdlSetting() {
-  if (!edlSettingsPromise) {
-    edlSettingsPromise = (async () => {
-      const client = requireClient()
-      const req = new GetListOfExportEDLSettingsRequest()
-      req.setBody(new GetListOfExportEDLSettingsRequestBody())
-      const res = await callUnary(client, 'getListOfExportEDLSettings', req, getAccessTokenMetadata())
-      const body = res && res.getBody ? res.getBody() : null
-      const names = body && body.getSettingNamesList
-        ? body.getSettingNamesList().map((name) => String(name || '').trim()).filter(Boolean)
-        : []
-      const chosen = preferredEdlSetting(names)
-      if (!chosen) {
-        throw new Error('Required Avid List Tool preset “VFX toolkit edl” was not found. Available presets: ' + (names.join(', ') || 'none'))
-      }
-      logMcapiVerbose('EDL setting selected', chosen)
-      return chosen
-    })().catch((error) => {
-      edlSettingsPromise = null
-      throw error
-    })
-  }
-  return edlSettingsPromise
-}
+const getRequiredEdlSetting = createEdlSettingResolver({
+  async listSettings() {
+    const client = requireClient()
+    const req = new GetListOfExportEDLSettingsRequest()
+    req.setBody(new GetListOfExportEDLSettingsRequestBody())
+    const res = await callUnary(client, 'getListOfExportEDLSettings', req, getAccessTokenMetadata())
+    const body = res && res.getBody ? res.getBody() : null
+    return body && body.getSettingNamesList ? body.getSettingNamesList() : []
+  },
+  async loadSetting(uniqueId, xml) {
+    const client = requireClient()
+    const req = new LoadSettingRequest()
+    const body = new LoadSettingRequestBody()
+    body.setUniqueId(uniqueId)
+    body.setXmlSetting(xml)
+    req.setBody(body)
+    await callUnary(client, 'loadSetting', req, getAccessTokenMetadata())
+    logMcapiVerbose('bundled EDL setting loaded', uniqueId)
+  },
+})
 
 function makeExportEdlRequest(mobId, track, settingName) {
   const req = new ExportEDLRequest()
@@ -630,7 +648,7 @@ async function loadTrackEdls({ mobId, sequenceName, tracks, parseEdl }) {
     allClips = await parseEdl(path)
     logMcapiVerbose('all-track EDL parsed', { clips: allClips.length })
   } catch (error) {
-    if (isEdlFileSaveFailure(error) || /three-digit EDL filename counter/i.test(error.message || '')) {
+    if (error.code === 'AEB_EDL_PRESET' || isEdlFileSaveFailure(error) || /three-digit EDL filename counter/i.test(error.message || '')) {
       throw error
     }
     logMcapiVerbose('all-track EDL unavailable — using paced per-track fallback', error.message)
@@ -656,11 +674,11 @@ async function loadTrackEdls({ mobId, sequenceName, tracks, parseEdl }) {
 }
 
 // From parsed EDL clips, find the one whose record span contains the playhead.
-export function findClipAtPlayhead(clips, playheadTC, fps = 24) {
-  const p = tcToFrames(playheadTC, fps)
+export function findClipAtPlayhead(clips, playheadTC, fps = 24, dropFrame = false) {
+  const p = tcToFrames(playheadTC, fps, dropFrame)
   return (clips || []).find((c) => {
-    const a = tcToFrames(c.rec_in, fps)
-    const b = tcToFrames(c.rec_out, fps)
+    const a = tcToFrames(c.rec_in, fps, dropFrame)
+    const b = tcToFrames(c.rec_out, fps, dropFrame)
     return p >= a && p < b
   }) || null
 }
@@ -773,7 +791,7 @@ async function extendWithHandles({ mobId, binPath, handles }) {
 // supplies a targetHint so grabs reuse that result instead of exporting another
 // temporary EDL. A direct grab retains one per-track EDL as a fallback.
 // Returns { track, target, fps, allTracks }.
-async function chooseTrackAndTarget({ sequenceMobId, sequenceName = '', atTC, parseEdl, trackNumber = 1, targetHint = null }) {
+async function chooseTrackAndTarget({ sequenceMobId, sequenceName = '', atTC, parseEdl, trackNumber = 1, targetHint = null, fps = 24, dropFrame = false }) {
   const allTracks = await getMobTrackInfo(sequenceMobId)
   logMcapiVerbose('track info', allTracks)
   const label = 'V' + trackNumber
@@ -782,8 +800,6 @@ async function chooseTrackAndTarget({ sequenceMobId, sequenceName = '', atTC, pa
   if (!track.numSegments) throw new Error(label + ' has no clips')
   if (!track.enabled) throw new Error('Enable ' + label + ' before grabbing (turn on the ' + label + ' track). Avid only exports ENABLED tracks.')
   logMcapiVerbose('chosen track', { chosen: track })
-  const fps = 24
-
   let target = null
   if (targetHint) {
     target = {
@@ -798,7 +814,7 @@ async function chooseTrackAndTarget({ sequenceMobId, sequenceName = '', atTC, pa
   if (!target) {
     const clips = await parseTrackEdl({ mobId: sequenceMobId, sequenceName, track, parseEdl })
     logMcapiVerbose(label + ' EDL clips', { count: clips.length, numSegments: track.numSegments, clips: clips.map((c) => ({ n: c.clip_name, in: c.rec_in, out: c.rec_out })) })
-    target = findClipAtPlayhead(clips, atTC, fps)
+    target = findClipAtPlayhead(clips, atTC, fps, dropFrame)
   } else {
     logMcapiVerbose(label + ' target reused from analysis', target)
   }
@@ -817,22 +833,23 @@ async function chooseTrackAndTarget({ sequenceMobId, sequenceName = '', atTC, pa
 export async function analyzeStack({ parseEdl }) {
   const shot = await getCurrentShot()
   const allTracks = await getMobTrackInfo(shot.mobId)
-  const fps = 24
+  const fps = timecodeFps(shot)
+  const dropFrame = !!shot.dropFrame
   const withContent = allTracks
     .filter((t) => t.type === TRACKTYPE_PICTURE && t.numSegments > 0)
     .sort((a, b) => a.number - b.number)
-  // If the editor has SELECTED specific track heads (distinct from `enabled`
-  // — see HANDOFF.md and trackSelection.mjs), only those are analyzed. A wide
-  // sequence (many video tracks) can be pointed at just the ones that matter
-  // instead of scanning every track with content — which also means fewer
-  // EDL exports (one per track analyzed; see the "EDL filename counter" fact).
+  // If the editor has SELECTED two or more specific track heads (distinct from
+  // `enabled` — see HANDOFF.md and trackSelection.mjs), only those are
+  // analyzed. A single highlighted track is normal Avid state and must not
+  // collapse analysis to V1-only. A wide sequence can still be pointed at a
+  // deliberate multi-track subset, which also means fewer EDL exports.
   const vids = narrowToSelection(withContent)
   const anchor = lowestTrack(vids)
   const edls = await loadTrackEdls({ mobId: shot.mobId, sequenceName: shot.name, tracks: vids, parseEdl })
   const stack = []
   for (const t of vids) {
     const clips = edls[t.number] || []
-    const c = findClipAtPlayhead(clips, shot.playheadTC, fps)
+    const c = findClipAtPlayhead(clips, shot.playheadTC, fps, dropFrame)
     logMcapiVerbose('stack scan V' + t.number, c
       ? { clip: c.clip_name, span: c.rec_in + ' → ' + c.rec_out, enabled: t.enabled }
       : { empty: true, enabled: t.enabled })
@@ -857,12 +874,12 @@ export async function analyzeStack({ parseEdl }) {
   return { shot, stack, anchorTrack: anchor ? anchor.number : null }
 }
 
-async function grabSourceHandledMob({ sequenceMobId, sequenceName = '', atTC, atFrame, parseEdl, destBinPath, handles, trackNumber = 1, targetHint = null, scratchBin = 'AEBridge_Scratch' }) {
+async function grabSourceHandledMob({ sequenceMobId, sequenceName = '', atTC, atFrame, parseEdl, destBinPath, handles, trackNumber = 1, targetHint = null, scratchBin = 'AEBridge_Scratch', fps = 24, dropFrame = false }) {
   await ensureBin(destBinPath)
   const destPath = await resolveBinPath(destBinPath)
   await ensureBin(scratchBin)
   const scratchPath = await resolveBinPath(scratchBin)
-  const { track, target, fps, allTracks } = await chooseTrackAndTarget({ sequenceMobId, sequenceName, atTC, parseEdl, trackNumber, targetHint })
+  const { track, target, allTracks } = await chooseTrackAndTarget({ sequenceMobId, sequenceName, atTC, parseEdl, trackNumber, targetHint, fps, dropFrame })
   const wantTrack = 'V' + track.number
 
   // ISOLATION GUARD. CreateSubClip does NOT fan one subclip per enabled track
@@ -1114,7 +1131,9 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trac
   const frame = Number.isInteger(atFrame) ? atFrame : shot.playheadFrame
   // Grab the clip under the playhead from its SOURCE master (handles from the
   // source's own media, never the sequence timeline).
-  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, sequenceName: shot.name, atTC: tc, atFrame: frame, parseEdl, destBinPath, handles, trackNumber, targetHint })
+  const fps = timecodeFps(shot)
+  const dropFrame = !!shot.dropFrame
+  const r = await grabSourceHandledMob({ sequenceMobId: shot.mobId, sequenceName: shot.name, atTC: tc, atFrame: frame, parseEdl, destBinPath, handles, trackNumber, targetHint, fps, dropFrame })
   const sequence = r.exportMob
   const created = r.created
 
@@ -1126,12 +1145,12 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trac
   try {
     const t = r.target
     if (t) {
-      const seqStartF = tcToFrames(shot.startTC || '00:00:00:00', 24)
+      const seqStartF = tcToFrames(shot.startTC || '00:00:00:00', fps, dropFrame)
       // The search window is the CLIP's record span: cuts define shots, and a
       // marker anywhere inside the clip is its label. The ±2 tolerance covers
       // TC-string round-tripping (rec_in/rec_out went through tcToFrames).
-      const inF = tcToFrames(t.rec_in, 24) - seqStartF
-      const outF = tcToFrames(t.rec_out, 24) - seqStartF
+      const inF = tcToFrames(t.rec_in, fps, dropFrame) - seqStartF
+      const outF = tcToFrames(t.rec_out, fps, dropFrame) - seqStartF
       // Restrict to markers on the grabbed track — server-side filter plus a
       // client-side guard in case the server ignores it — so each plate in a
       // stack takes its OWN track's comment, not a neighbour's.
@@ -1198,7 +1217,7 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trac
   const subCols = await getMobColumns(sequence.mobId).catch(() => ({}))
   const startTC = pick(subCols, ['Start', 'Mark IN'])
   const endTC = pick(subCols, ['End', 'Mark OUT'])
-  const fps = Math.round(parseFloat(shot.frameRate) || 24)
+  const plateFps = Math.round(parseFloat(shot.frameRate) || 24)
 
   // FIXED 2026-08-07: every plate ever grabbed carried frame_count 0.
   //
@@ -1213,8 +1232,8 @@ export async function grabShot({ destBinPath, handles = 0, parseEdl = null, trac
   // end−start fallback and the result was always 0. Order now runs
   // most-reliable first, and the Duration path uses a duration-aware parser.
   let frameCount = Number(pick(subCols, ['Duration Frames'])) || 0
-  if (!frameCount) frameCount = tcToFrames(endTC, fps) - tcToFrames(startTC, fps)
-  if (!frameCount) frameCount = durationToFrames(pick(subCols, ['Duration']), fps)
+  if (!frameCount) frameCount = tcToFrames(endTC, plateFps, dropFrame) - tcToFrames(startTC, plateFps, dropFrame)
+  if (!frameCount) frameCount = durationToFrames(pick(subCols, ['Duration']), plateFps)
   if (!frameCount || frameCount < 0) frameCount = 0
   if (!frameCount) {
     // Never silent: a 0 here disables the return-validation frame-count gate
@@ -1507,13 +1526,38 @@ export async function exportShot({ mobId, exportDir, fileName, exportSettingsNam
 // Node can unit-test them (tests/test_timecode.mjs).
 
 // Inverse of tcToFrames (non-drop; TC labels at round(fps)).
-function framesToTc(frames, fps) {
+function framesToTc(frames, fps, dropFrame = false) {
+  const nominal = Math.round(Number(fps) || 24)
   const f = Math.max(0, Math.round(frames))
-  const ff = f % fps
-  const totalSec = Math.floor(f / fps)
+  let hh
+  let mm
+  let totalSec
+  let ff
+  if (dropFrame && (nominal === 30 || nominal === 60)) {
+    const drop = nominal === 30 ? 2 : 4
+    const framesPerTenMinutes = nominal * 600 - drop * 9
+    const tenMinuteBlocks = Math.floor(f / framesPerTenMinutes)
+    let remainder = f % framesPerTenMinutes
+    let minute = tenMinuteBlocks * 10
+    let frameOfMinute
+    if (remainder < nominal * 60) {
+      frameOfMinute = remainder
+    } else {
+      remainder -= nominal * 60
+      minute += 1 + Math.floor(remainder / (nominal * 60 - drop))
+      frameOfMinute = (remainder % (nominal * 60 - drop)) + drop
+    }
+    hh = Math.floor(minute / 60)
+    mm = minute % 60
+    totalSec = Math.floor(frameOfMinute / nominal)
+    ff = frameOfMinute % nominal
+  } else {
+    ff = f % nominal
+    totalSec = Math.floor(f / nominal)
+    hh = Math.floor(totalSec / 3600)
+    mm = Math.floor(totalSec / 60) % 60
+  }
   const ss = totalSec % 60
-  const mm = Math.floor(totalSec / 60) % 60
-  const hh = Math.floor(totalSec / 3600)
   const p2 = (n) => String(n).padStart(2, '0')
-  return p2(hh) + ':' + p2(mm) + ':' + p2(ss) + ':' + p2(ff)
+  return p2(hh) + ':' + p2(mm) + ':' + p2(ss) + (dropFrame ? ';' : ':') + p2(ff)
 }

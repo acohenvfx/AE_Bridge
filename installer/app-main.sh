@@ -38,6 +38,8 @@ SKIP_LAUNCHCTL="${AEBRIDGE_INSTALL_SKIP_LAUNCHCTL:-0}"
 SKIP_AVPI="${AEBRIDGE_INSTALL_SKIP_AVPI:-0}"
 NONINTERACTIVE="${AEBRIDGE_INSTALL_NONINTERACTIVE:-0}"
 ALLOW_ADHOC="${AEBRIDGE_INSTALL_ALLOW_ADHOC:-0}"
+SKIP_AVID_LIFECYCLE="${AEBRIDGE_INSTALL_SKIP_AVID_LIFECYCLE:-0}"
+AVID_APP_PATH="${AEBRIDGE_INSTALL_AVID_APP_PATH:-/Applications/Avid Media Composer/AvidMediaComposer.app}"
 
 APP_PATH="$APP_DIR/AEBridge Helper.app"
 LAUNCHER_PATH="$SUPPORT_DIR/AEBridgeLauncher.sh"
@@ -45,6 +47,7 @@ PLIST_PATH="$AGENTS_DIR/$LABEL.plist"
 
 PROGRESS_FILE=""
 PROGRESS_PID=""
+AVID_WAS_RUNNING=false
 
 log() { printf '[AEBridge Installer] %s\n' "$*"; }
 die() {
@@ -98,6 +101,114 @@ strip_quarantine() {
   fi
 }
 
+physical_arch() {
+  if [[ "$(sysctl -in hw.optional.arm64 2>/dev/null || true)" == "1" ]]; then
+    printf 'arm64\n'
+  else
+    case "$(uname -m)" in
+      arm64|aarch64) printf 'arm64\n' ;;
+      x86_64) printf 'x86_64\n' ;;
+      *) return 1 ;;
+    esac
+  fi
+}
+
+validate_helper_bundle() {
+  local app="$1" expected_arch="$2" actual_arches team
+  local binary="$app/Contents/MacOS/aebridge-helper"
+  [[ -x "$binary" ]] || { log "helper executable is missing"; return 1; }
+  actual_arches="$(lipo -archs "$binary" 2>/dev/null || true)"
+  printf '%s\n' "$actual_arches" | tr ' ' '\n' | grep -qx "$expected_arch" || {
+    log "helper architecture '$actual_arches' does not include $expected_arch"
+    return 1
+  }
+  if [[ "$ALLOW_ADHOC" != "1" ]]; then
+    codesign --verify --deep --strict "$app" >/dev/null 2>&1 || {
+      log "helper code signature is invalid"
+      return 1
+    }
+    if [[ -n "$TEAM_ID" ]]; then
+      team="$(codesign -dv --verbose=4 "$app" 2>&1 | awk -F= '/^TeamIdentifier=/{print $2; exit}')"
+      [[ "$team" == "$TEAM_ID" ]] || {
+        log "helper Team ID '${team:-none}' does not match $TEAM_ID"
+        return 1
+      }
+    fi
+  fi
+}
+
+validate_panel_avpi() {
+  local avpi="$1" manifest comment
+  unzip -tqq "$avpi" >/dev/null 2>&1 || die "the bundled Avid panel is not a valid AVPI package"
+  manifest="$(unzip -p "$avpi" avid-manifest.json 2>/dev/null)"
+  [[ "$manifest" == *'"name": "com.acohenvfx.aebridge"'* \
+    && "$manifest" == *'"displayName": "AEBridge"'* \
+    && "$manifest" == *'"displayText": "AEBridge"'* \
+    && "$manifest" == *'"windowTitle": "AEBridge"'* \
+    && "$manifest" == *'"url": "http://localhost:8010/app"'* ]] \
+    || die "the bundled Avid panel has the wrong identity or startup URL"
+  comment="$(unzip -z "$avpi" 2>/dev/null)"
+  [[ "$comment" == *'<ds:Signature '* \
+    && "$comment" == *'<ds:X509Certificate>'* ]] \
+    || die "the bundled Avid panel is not digitally signed by Avid"
+}
+
+# Media Composer discovers Panel SDK plug-ins only during a true application
+# launch. Closing a project or its windows is not enough, which led artists to
+# reboot the Mac when the newly installed panel did not appear. Require a
+# normal user-driven quit, then verify the process is actually gone before
+# replacing the AVPI. We deliberately do not send Avid an AppleEvent to quit:
+# that would add a confusing macOS Automation permission prompt.
+avid_pids() {
+  pgrep -f '/AvidMediaComposer\.app/Contents/MacOS/AvidMediaComposer' 2>/dev/null || true
+}
+
+prepare_avid_for_panel_install() {
+  [[ "$NONINTERACTIVE" != "1" && "$SKIP_AVID_LIFECYCLE" != "1" ]] || return 0
+  [[ -n "$(avid_pids)" ]] || return 0
+
+  AVID_WAS_RUNNING=true
+  local choice
+  while [[ -n "$(avid_pids)" ]]; do
+    choice="$(osascript 2>/dev/null <<'APPLESCRIPT' || true
+  set dlg to display dialog "Avid Media Composer is currently open.
+
+Before continuing:
+1. Switch to Avid and save your work.
+2. Choose Avid Media Composer > Quit Avid Media Composer, or press Command-Q.
+3. Return here and click Continue.
+
+Closing only the project or its windows is not enough. You do not need to restart your Mac." buttons {"Cancel", "Continue"} default button "Continue" with title "AEBridge Installer"
+  return button returned of dlg
+APPLESCRIPT
+)"
+    [[ "$choice" == "Continue" ]] || exit 0
+    if [[ -n "$(avid_pids)" ]]; then
+      osascript -e 'display alert "Avid is still running" message "Fully quit Media Composer with Command-Q, then click Continue again. A Mac restart is not required." as warning' >/dev/null 2>&1 || true
+    fi
+  done
+}
+
+offer_to_open_avid() {
+  [[ "$NONINTERACTIVE" != "1" && "$SKIP_AVID_LIFECYCLE" != "1" ]] || return 0
+  [[ -d "$AVID_APP_PATH" ]] || return 0
+
+  local choice message
+  if $AVID_WAS_RUNNING; then
+    message="AEBridge is installed and Avid was fully closed. Open Media Composer now to load the new panel."
+  else
+    message="AEBridge is installed. Open Media Composer now to load the new panel."
+  fi
+  choice="$(osascript - "$message" 2>/dev/null <<'APPLESCRIPT' || true
+on run argv
+  set dlg to display dialog (item 1 of argv) buttons {"Done", "Open Avid"} default button "Open Avid" with title "AEBridge Installer"
+  return button returned of dlg
+end run
+APPLESCRIPT
+)"
+  [[ "$choice" == "Open Avid" ]] && open "$AVID_APP_PATH" >/dev/null 2>&1 || true
+}
+
 # Offer to eject and bin the disk image once the install has succeeded, so the
 # artist is not left with a mounted volume and a stale .dmg in Downloads.
 offer_dmg_cleanup() {
@@ -122,12 +233,10 @@ offer_dmg_cleanup() {
   [[ -f "$dmg_path" ]] || return 0
 
   choice="$(osascript 2>/dev/null <<'APPLESCRIPT'
-tell application "System Events"
   set dlg to display dialog "AEBridge is installed.
 
 Would you like to keep this disk image, or eject it and move the .dmg file to Trash?" buttons {"Keep DMG", "Move to Trash"} default button "Keep DMG" with title "AEBridge Installer"
   return button returned of dlg
-end tell
 APPLESCRIPT
   )"
   [[ "$choice" == "Move to Trash" ]] || return 0
@@ -155,7 +264,6 @@ APPLESCRIPT
 # ── Welcome ───────────────────────────────────────────────────────────────
 if [[ "$NONINTERACTIVE" != "1" ]]; then
   result=$(osascript 2>/dev/null <<APPLESCRIPT
-tell application "System Events"
   set dlg to display dialog "Welcome to AEBridge
 
 This installer will:
@@ -166,12 +274,12 @@ You will be asked for your administrator password once, to install the panel.
 
 Click Install to continue." buttons {"Quit", "Install"} default button "Install" with title "AEBridge Installer"
   return button returned of dlg
-end tell
 APPLESCRIPT
   )
   [[ "$result" == "Quit" ]] && exit 0
 fi
 
+prepare_avid_for_panel_install
 start_progress
 
 # ── 1. Stop anything already running ─────────────────────────────────────
@@ -190,6 +298,7 @@ AVPI_SRC="$(find "$RESOURCES/avpi" -maxdepth 1 -name '*.avpi' 2>/dev/null | head
 if [[ "$SKIP_AVPI" == "1" ]]; then
   log "skipping panel install (AEBRIDGE_INSTALL_SKIP_AVPI=1)"
 elif [[ -n "$AVPI_SRC" ]]; then
+  validate_panel_avpi "$AVPI_SRC"
   AVPI_NAME="$(basename "$AVPI_SRC")"
   log "installing panel -> $AVID_DIR/$AVPI_NAME"
 
@@ -214,25 +323,22 @@ elif [[ -n "$AVPI_SRC" ]]; then
       || die "panel install was cancelled or failed"
   fi
 else
-  log "no .avpi in the DMG; skipping panel install"
+  die "the bundled Avid panel is missing from this installer"
 fi
 
 # ── 3. Seed helper app ───────────────────────────────────────────────────
 # Shipping a helper in the DMG means first launch works without waiting on a
 # download — an edit bay may have no internet at all.
 set_progress 38 "Installing the AEBridge helper…"
-SEED_APP="$RESOURCES/helper/AEBridgeHelper.app"
+SEED_ARCH="$(physical_arch)" || die "this Mac's processor architecture is unsupported"
+SEED_APP="$RESOURCES/helper/$SEED_ARCH/AEBridgeHelper.app"
+# Development DMGs created before RC1 carried one helper at this legacy path.
+[[ -d "$SEED_APP" ]] || SEED_APP="$RESOURCES/helper/AEBridgeHelper.app"
 if [[ -d "$SEED_APP" ]]; then
   # Refuse a seed the launcher would later reject anyway. An unsigned helper
   # installs fine and then fails the Team ID check on every update, which is a
   # far more confusing failure than one here.
-  if [[ "$ALLOW_ADHOC" != "1" && -n "$TEAM_ID" ]]; then
-    SEED_TEAM="$(codesign -dv --verbose=4 "$SEED_APP" 2>&1 | awk -F= '/^TeamIdentifier=/{print $2; exit}')"
-    if [[ "$SEED_TEAM" != "$TEAM_ID" ]]; then
-      die "the bundled helper is signed by '${SEED_TEAM:-nobody}', not $TEAM_ID.
-This DMG was built with a development helper. Set AEBRIDGE_INSTALL_ALLOW_ADHOC=1 to install it anyway."
-    fi
-  fi
+  validate_helper_bundle "$SEED_APP" "$SEED_ARCH" || die "the bundled $SEED_ARCH helper failed architecture or signature validation"
 
   log "installing helper -> $APP_PATH"
   mkdir -p "$APP_DIR"
@@ -246,10 +352,15 @@ This DMG was built with a development helper. Set AEBRIDGE_INSTALL_ALLOW_ADHOC=1
     [[ -d "$APP_PATH.old" ]] && mv "$APP_PATH.old" "$APP_PATH"
     die "could not install the helper app"
   fi
-  rm -rf "$APP_PATH.old"
   strip_quarantine "$APP_PATH"
+  if ! validate_helper_bundle "$APP_PATH" "$SEED_ARCH"; then
+    rm -rf "$APP_PATH"
+    [[ -d "$APP_PATH.old" ]] && mv "$APP_PATH.old" "$APP_PATH"
+    die "the installed helper failed post-copy architecture or signature validation"
+  fi
+  rm -rf "$APP_PATH.old"
 else
-  log "no seeded helper in the DMG; the launcher will download one on first run"
+  die "the DMG does not contain a helper for $SEED_ARCH"
 fi
 
 # ── 4. Launcher ──────────────────────────────────────────────────────────
@@ -310,15 +421,7 @@ if [[ "$SKIP_LAUNCHCTL" != "1" ]]; then
   if $HELPER_OK; then
     log "helper is responding on 127.0.0.1:$HELPER_PORT"
     finish_progress
-    if [[ "$NONINTERACTIVE" != "1" ]]; then
-      osascript >/dev/null 2>&1 <<'APPLESCRIPT' || true
-tell application "System Events"
-  display dialog "Installation complete.
-
-Restart Avid Media Composer, then open Tools > AEBridge." buttons {"Done"} default button "Done" with title "AEBridge Installer"
-end tell
-APPLESCRIPT
-    fi
+    offer_to_open_avid
     offer_dmg_cleanup
   else
     finish_progress
@@ -332,16 +435,14 @@ APPLESCRIPT
     echo "WARNING: helper did not respond within 45s." >&2
     echo "$TAIL_LOG" >&2
     osascript >/dev/null 2>&1 <<APPLESCRIPT || true
-tell application "System Events"
   display dialog "The panel was installed, but the helper has not answered yet.
 
 It may still be starting. If AEBridge reports \"Helper offline\" in Avid, check:
 $LOG_DIR/helper.err.log" buttons {"OK"} default button "OK" with title "AEBridge Installer"
-end tell
 APPLESCRIPT
   fi
 else
   finish_progress
 fi
 
-log "done. Restart Media Composer, then open Tools > AEBridge."
+log "done. Launch Media Composer, then open Tools > AEBridge. No Mac restart is required."

@@ -9,26 +9,28 @@ from __future__ import annotations
 
 import threading
 import time
+import logging
 from pathlib import Path
 from typing import Optional
 
 from .jobs import store
 from .models import JobState
+from .config import settings
+
+log = logging.getLogger(__name__)
 
 _MEDIA_EXTS = {".mov", ".mxf", ".mp4", ".m4v", ".avi", ".mkv"}
 
 
 def _newest_media(watch_dir: Path, stem: Optional[str] = None) -> Optional[Path]:
-    """Newest render in the shared render folder. If a stem is given (the shot
-    name), only match files with that stem so jobs don't pick up each other's
-    renders."""
+    """Newest render in one job's render folder, matching its exact stem."""
     if not watch_dir or not watch_dir.exists():
         return None
     files = []
     for p in watch_dir.glob("*"):
         if not (p.is_file() and p.suffix.lower() in _MEDIA_EXTS and p.stat().st_size > 0):
             continue
-        if stem and not (p.stem == stem or p.stem.startswith(stem)):
+        if stem and not (p.stem == stem or p.stem.startswith(stem + "_")):
             continue
         files.append(p)
     return max(files, key=lambda p: p.stat().st_mtime) if files else None
@@ -57,12 +59,22 @@ class ReturnWatcher:
             try:
                 self._tick()
             except Exception:
-                pass  # never let the watcher die on a transient error
+                log.exception("AEBridge render watcher tick failed")
             self._stop.wait(self.interval)
 
     def _tick(self) -> None:
+        from .licensing import license_status
+        if not license_status().get('usable'):
+            return
         for job in store.all():
-            if job.state != JobState.ready_in_ae or not job.watch_dir:
+            if job.state not in (JobState.ready_in_ae, JobState.rendering) or not job.watch_dir:
+                continue
+            if job.state == JobState.ready_in_ae:
+                job.transition(JobState.rendering)
+                job.render_started_at = time.time()
+            if job.render_started_at and time.time() - job.render_started_at > settings.render_timeout_s:
+                job.fail(f"render timeout after {settings.render_timeout_s} seconds")
+                self._sizes.pop(job.job_id, None)
                 continue
             cand = _newest_media(job.watch_dir, job.render_stem)
             if cand is None:

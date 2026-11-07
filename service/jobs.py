@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import secrets
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,12 +40,13 @@ class InvalidTransition(RuntimeError):
 class Job:
     job_id: str
     project_mode: ProjectMode
+    auto_swap: bool = False
     state: JobState = JobState.exporting
     reference_path: Optional[Path] = None
     sidecar_path: Optional[Path] = None
     aep_path: Optional[Path] = None
     watch_dir: Optional[Path] = None
-    render_stem: Optional[str] = None  # shared render folder → match this filename stem
+    render_stem: Optional[str] = None  # exact filename stem inside this job's render folder
     return_path: Optional[Path] = None
     return_bin: Optional[str] = None
     sidecar: Optional[Sidecar] = None
@@ -53,6 +55,8 @@ class Job:
     # Every exported plate file for this job (base + stack), so a job can tell
     # the panel when its plates have been deleted from disk.
     plate_paths: list[Path] = field(default_factory=list)
+    created_at: float = field(default_factory=time.time)
+    render_started_at: Optional[float] = None
 
     def missing_plates(self) -> list[str]:
         paths = list(self.plate_paths)
@@ -74,6 +78,7 @@ class Job:
             job_id=self.job_id,
             state=self.state,
             project_mode=self.project_mode,
+            auto_swap=self.auto_swap,
             shot_name=self.sidecar.shot_name if self.sidecar else None,
             render_stem=self.render_stem,
             reference_path=str(self.reference_path) if self.reference_path else None,
@@ -199,9 +204,10 @@ class Store:
     # --- jobs ---
     def new_job_id(self, shot_name: str) -> str:
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in shot_name).strip("_.") or "shot"
         with self._lock:
-            n = sum(1 for k in self._jobs if shot_name in k) + 1
-        return f"aeb_{stamp}_{shot_name}_{n:03d}"
+            n = sum(1 for k in self._jobs if safe_name in k) + 1
+        return f"aeb_{stamp}_{safe_name}_{n:03d}"
 
     def add(self, job: Job) -> None:
         with self._lock:
