@@ -30,12 +30,20 @@ os.environ["AEBRIDGE_LICENSE_ENV"] = "local"
 os.environ["AEBRIDGE_LICENSE_CREDENTIAL_BACKEND"] = "file"
 os.environ["AEBRIDGE_LICENSE_SUPPORT_DIR"] = str(Path(_TMP) / "license")
 
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient as _StarletteTestClient  # noqa: E402
 
-_RawTestClient = TestClient
+# The helper only answers requests addressed to loopback hostnames (DNS
+# rebinding guard), and TestClient's default host is "testserver".
+LOCAL_BASE_URL = "http://127.0.0.1:8010"
 
 
-class _SessionTestClient(TestClient):
+class _RawTestClient(_StarletteTestClient):
+    def __init__(self, app, **kwargs):
+        kwargs.setdefault("base_url", LOCAL_BASE_URL)
+        super().__init__(app, **kwargs)
+
+
+class _SessionTestClient(_RawTestClient):
     def __enter__(self):
         client = super().__enter__()
         response = client.get("/v1/session")
@@ -96,6 +104,19 @@ def test_protected_routes_require_session():
     with _RawTestClient(app) as c:
         assert c.get("/v1/aebridge/jobs").status_code == 401
         assert c.get("/healthz").status_code == 200
+
+
+def test_non_loopback_host_rejected():
+    """A page whose hostname was rebound to 127.0.0.1 must not get a session
+    or reach the API: its requests carry its own hostname in Host."""
+    with _RawTestClient(app, base_url="http://attacker.example:8010") as c:
+        assert c.get("/v1/session").status_code == 400
+        assert c.get("/v1/aebridge/jobs").status_code == 400
+        assert c.get("/healthz").status_code == 400
+    for base in ("http://localhost:8010", "http://127.0.0.1:8010"):
+        with _RawTestClient(app, base_url=base) as c:
+            assert c.get("/healthz").status_code == 200
+            assert c.get("/v1/session").status_code == 200
 
 
 def test_job_id_cannot_escape_job_roots():

@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_app_page_served():
     settings.roots.ensure()
     (settings.roots.template_root / "lower_third_v2.aep").write_bytes(b"T")
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://localhost:8010") as c:
         r = c.get("/app")
         assert r.status_code == 200
         assert "AEBridge" in r.text

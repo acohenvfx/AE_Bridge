@@ -10,8 +10,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import DEV_ORIGINS, HELPER_VERSION, settings
+
+# Hostnames (port ignored) the helper answers to. The panel manifest loads
+# http://localhost:8010/app and allows 127.0.0.1:8010; dev Nuxt calls either.
+ALLOWED_HOSTS = ("localhost", "127.0.0.1")
 from .integrations import ae
 from .routers import aebridge, licensing, ui, ui_proxy, version
 from .routers.ui import DIST_HTML
@@ -30,6 +35,14 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="AEBridge Helper", version=HELPER_VERSION, lifespan=lifespan)
+
+# DNS-rebinding guard. Binding to 127.0.0.1 stops other machines, but not a web
+# page in a local browser whose own hostname has been re-pointed at 127.0.0.1:
+# that page is "same-origin" with itself, can fetch /v1/session for a cookie,
+# and could then drive every /v1 route. Such requests carry the attacker's
+# hostname in Host, so only answer requests addressed to loopback names.
+# Added last so it runs first (Starlette wraps middleware outside-in).
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(ALLOWED_HOSTS))
 
 # In release the panel is served BY the helper (same-origin, no CORS needed).
 # In dev the Nuxt panel runs on :3010 and calls the helper cross-origin, so

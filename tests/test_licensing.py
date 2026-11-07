@@ -62,10 +62,41 @@ class LicenseTests(unittest.TestCase):
     def test_unconfigured_fails_closed(self):
         self.assertFalse(licensing.license_status()['usable'])
 
+    def test_credentials_cached_and_invalidated(self):
+        reads = []
+        real_read = licensing._read_credentials
+
+        def counting_read():
+            reads.append(1)
+            return real_read()
+
+        licensing._invalidate_credential_cache()
+        self.addCleanup(licensing._invalidate_credential_cache)
+        with patch.object(licensing, '_read_credentials', counting_read):
+            self.assertIsNone(licensing._load_credentials())
+            self.assertIsNone(licensing._load_credentials())
+            self.assertEqual(len(reads), 1)  # second call served from cache
+            licensing._store_credentials({'deviceId': 'mac', 'refreshToken': 'r'})
+            self.assertEqual(licensing._load_credentials(), {'deviceId': 'mac', 'refreshToken': 'r'})
+            self.assertEqual(len(reads), 2)  # store invalidated the cache
+            licensing._delete_credentials()
+            self.assertIsNone(licensing._load_credentials())
+            self.assertEqual(len(reads), 3)  # delete invalidated it too
+
+    def test_keychain_timeout_is_not_cached_or_fatal(self):
+        import subprocess
+        licensing._invalidate_credential_cache()
+        self.addCleanup(licensing._invalidate_credential_cache)
+        with patch.dict(os.environ, {'AEBRIDGE_LICENSE_CREDENTIAL_BACKEND': ''}), \
+                patch.object(licensing.platform, 'system', return_value='Darwin'), \
+                patch.object(licensing.subprocess, 'run', side_effect=subprocess.TimeoutExpired('security', 15)):
+            self.assertIsNone(licensing._load_credentials())
+        self.assertIsNone(licensing._credential_cache)
+
     def test_api_requires_local_session(self):
         from fastapi.testclient import TestClient
         from service.app import app
-        client = TestClient(app)
+        client = TestClient(app, base_url='http://127.0.0.1:8010')
         self.assertEqual(client.post('/v1/license/activate', json={'activationCode': 'test'}).status_code, 401)
         client.get('/v1/session')
         self.assertEqual(client.get('/v1/license/status').status_code, 200)

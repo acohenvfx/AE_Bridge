@@ -37,6 +37,9 @@ REMOTE_CHECK_TTL_SECONDS = 300
 USABLE_SUBSCRIPTION_STATES = frozenset({'active', 'trialing', 'past_due'})
 _remote_checked_at = 0.0
 _remote_state: dict[str, Any] | None = None
+CREDENTIAL_CACHE_TTL_SECONDS = 60
+# (cache key, monotonic expiry, credentials or None)
+_credential_cache: tuple[tuple[str, str], float, dict[str, str] | None] | None = None
 
 
 class LicenseError(Exception):
@@ -90,6 +93,7 @@ def _credentials_path() -> Path:
 
 
 def _store_credentials(credentials: dict[str, str]) -> None:
+    _invalidate_credential_cache()
     encoded = json.dumps(credentials, separators=(',', ':'), sort_keys=True)
     if _file_credentials_allowed():
         _private_write(_credentials_path(), encoded)
@@ -117,7 +121,44 @@ def _store_credentials(credentials: dict[str, str]) -> None:
         raise LicenseError(500, 'keychain_write_failed', 'Could not save license credentials')
 
 
+class _TransientCredentialError(Exception):
+    """The credential store could not be read right now; don't cache that."""
+
+
+def _credential_cache_key() -> tuple[str, str]:
+    if _file_credentials_allowed():
+        return ('file', str(_credentials_path()))
+    return ('keychain', f'{KEYCHAIN_SERVICE}/{KEYCHAIN_ACCOUNT}')
+
+
+def _invalidate_credential_cache() -> None:
+    global _credential_cache
+    _credential_cache = None
+
+
 def _load_credentials() -> dict[str, str] | None:
+    """Stored device credentials, cached briefly in memory.
+
+    Every license-gated request and every render-watcher tick asks for these.
+    Uncached, each ask spawned `/usr/bin/security` (twice per request). The
+    helper is the only writer and invalidates on store/delete, so a short TTL
+    only bounds how long an out-of-band Keychain edit goes unnoticed.
+    """
+    global _credential_cache
+    key = _credential_cache_key()
+    now = time.monotonic()
+    cached = _credential_cache
+    if cached is not None and cached[0] == key and now < cached[1]:
+        return dict(cached[2]) if cached[2] is not None else None
+    try:
+        value = _read_credentials()
+    except _TransientCredentialError:
+        return None
+    _credential_cache = (key, now + CREDENTIAL_CACHE_TTL_SECONDS, value)
+    return dict(value) if value is not None else None
+
+
+def _read_credentials() -> dict[str, str] | None:
     if _file_credentials_allowed():
         try:
             value = json.loads(_credentials_path().read_text(encoding='utf-8'))
@@ -126,21 +167,25 @@ def _load_credentials() -> dict[str, str] | None:
     else:
         if platform.system().lower() != 'darwin':
             return None
-        result = subprocess.run(
-            [
-                '/usr/bin/security',
-                'find-generic-password',
-                '-s',
-                KEYCHAIN_SERVICE,
-                '-a',
-                KEYCHAIN_ACCOUNT,
-                '-w',
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=15,
-        )
+        try:
+            result = subprocess.run(
+                [
+                    '/usr/bin/security',
+                    'find-generic-password',
+                    '-s',
+                    KEYCHAIN_SERVICE,
+                    '-a',
+                    KEYCHAIN_ACCOUNT,
+                    '-w',
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            # Previously an uncaught TimeoutExpired surfaced as a 500.
+            raise _TransientCredentialError() from exc
         if result.returncode != 0:
             return None
         try:
@@ -157,6 +202,7 @@ def _load_credentials() -> dict[str, str] | None:
 
 
 def _delete_credentials() -> None:
+    _invalidate_credential_cache()
     if _file_credentials_allowed():
         _credentials_path().unlink(missing_ok=True)
         return
@@ -357,6 +403,7 @@ def activate_license(activation_code: str, device_name: str | None = None) -> di
         raise LicenseError(502, 'license_service_error', 'Activation response is incomplete')
     payload = verify_lease(lease, expected_device_id=device_id)
     _store_credentials({'deviceId': device_id, 'refreshToken': refresh_token})
+    _invalidate_credential_cache()  # drop any read that raced the write
     _save_lease(lease, payload)
     _invalidate_remote_status_cache()
     return _public_state(payload)
@@ -406,6 +453,7 @@ def deactivate_license() -> dict[str, bool]:
             else:
                 raise
     _delete_credentials()
+    _invalidate_credential_cache()  # drop any read that raced the delete
     (_support_dir() / 'license-lease.json').unlink(missing_ok=True)
     _invalidate_remote_status_cache()
     return {'deactivated': True, 'alreadyDeactivated': already_deactivated}
