@@ -33,6 +33,10 @@ export const aebridge = Vue.observable({
   // track and it isolates exactly one per grab.
   stack: [],
   stackTC: '',
+  // Sequence-relative frame of the analyzed playhead. Grabs use this (with
+  // stackTC), not the live playhead, so scrubbing after Analyze can't export
+  // a different shot's media under this stack's names.
+  stackFrame: null,
   // Which track NAMES the stack — ordinarily V1, but selecting specific track
   // heads in Avid before Analyze (see trackSelection.mjs) can narrow the scan
   // to any subset, in which case the lowest one becomes the anchor. Set once

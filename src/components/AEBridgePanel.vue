@@ -529,7 +529,7 @@ function sig(list) {
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', autoGrabRangeStatus: '', selectingScratch: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0, confirmState: { open: false, message: '', _resolve: null }, noticeState: { open: false, title: '', body: '' } }
+    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', autoGrabRangeStatus: '', selectingScratch: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, confirmState: { open: false, message: '', _resolve: null }, noticeState: { open: false, title: '', body: '' } }
   },
   computed: {
     logText() {
@@ -658,6 +658,11 @@ export default {
     }
   },
   async mounted() {
+    // Poll back-off counters. Plain instance fields, NOT data(): Vue 2 skips
+    // proxying data keys that start with `_`, so declared there they read as
+    // undefined, `+= 1` made NaN, and the idle back-off never engaged.
+    this._idleTicks = 0
+    this._slowSkip = 0
     logMcapiVerbose('UI build', { build: UI_BUILD })
     // Never carry an armed auto-grab state into a newly opened panel. These
     // controls are intentionally session-only; the editor opts in each time.
@@ -998,6 +1003,7 @@ export default {
       this.s.baseName = ''
       this.s.stackShot = null
       this.s.stackTC = ''
+      this.s.stackFrame = null
       this.s.stackAnchorTrack = null
       this.s.message = ''
     },
@@ -1052,6 +1058,7 @@ export default {
           if (!this.s.stackAnchorTrack) this.s.stackAnchorTrack = r.anchorTrack
         }
         this.s.stackTC = r.shot.playheadTC
+        this.s.stackFrame = Number.isInteger(r.shot.playheadFrame) ? r.shot.playheadFrame : null
         this.s.message = this.s.stack.length
           ? this.s.stack.length + ' plate(s): ' + this.s.stack.map((p) => 'V' + p.track).join(', ')
           : 'No picture under the playhead — park on a shot and Analyze again.'
@@ -1201,6 +1208,11 @@ export default {
           anchorTrack: this.anchorTrack,
           baseName: track === this.anchorTrack ? '' : this.s.baseName,
           targetHint,
+          // Grab the ANALYZED shot. Without these grabShot reads the live
+          // playhead, so scrubbing after Analyze exported shot B's media
+          // under shot A's name and metadata.
+          atTC: this.s.stackTC,
+          atFrame: this.s.stackFrame,
           parseEdl: (edlPath) => api.parseEdl(edlPath).then((r) => r.clips)
         })
         if (track === this.anchorTrack) {
