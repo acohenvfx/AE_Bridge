@@ -68,9 +68,17 @@ def test_proxy_is_off_by_default_so_a_working_install_is_unchanged():
     if not os.environ.get("AEBRIDGE_UI_ORIGIN"):
         assert ui_proxy.UI_ORIGIN == ""
         # With it unset, app.py serves the local UI router instead.
+        from fastapi.testclient import TestClient
+
         from service.app import app
 
-        assert any(getattr(r, "path", None) == "/app" for r in app.routes)
+        # Check behaviour, not app.routes: newer FastAPI wraps included
+        # routers, so their paths no longer appear there. The local UI router
+        # answers /app itself (it sets the session cookie, or says the UI
+        # isn't built). The proxy would forward it upstream instead.
+        with TestClient(app, base_url="http://localhost:8010") as c:
+            r = c.get("/app")
+        assert "aebridge_session" in r.headers.get("set-cookie", "") or "AEBridge UI not built" in r.text
 
 
 def test_healthz_is_registered_before_the_static_mount():

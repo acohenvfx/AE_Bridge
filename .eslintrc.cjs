@@ -1,5 +1,7 @@
 module.exports = {
   root: true,
+  // Uses import attributes, which ESLint 8's parser can't read. See the file.
+  ignorePatterns: ['worker/version.mjs'],
   env: {
     browser: true,
     es2021: true,

@@ -1,0 +1,64 @@
+name: Tests
+
+# Runs the full test suite on every PR and on pushes to main, so a change is
+# checked before it merges rather than only when a helper release is tagged.
+# macOS to match the release gates (the installer/launcher tests drive the
+# real bash scripts) and the helper's real platform.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: yarn
+
+      - name: Install dependencies
+        run: |
+          yarn install --frozen-lockfile
+          python -m pip install -r requirements-lock.txt pytest
+
+      - name: Lint
+        run: yarn lint
+
+      - name: JS tests
+        run: |
+          for t in tests/*.mjs; do
+            echo "== $t"
+            node "$t"
+          done
+
+      # test_ui_and_avpi.py checks the served Nuxt build and the packaged
+      # .avpi, so build both first (release mode, as shipped).
+      - name: Build panel UI and .avpi
+        env:
+          AEB_RELEASE: '1'
+        run: |
+          yarn generate:release
+          yarn build:panel
+
+      - name: Python tests
+        run: PYTHONPATH=. python -m pytest -q
