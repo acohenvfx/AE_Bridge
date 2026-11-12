@@ -12,7 +12,7 @@ imports the render back into the same bin. Follows the Elemental Bender
 architecture but is its **own** product (own helper port, no ElementalEngine).
 
 - Repo: this folder (`AE_Bridge`), git remote `acohenvfx/AE_Bridge`.
-- Stack: **Nuxt 2 / Vue 2** panel (Node 16, Yarn) + **Python FastAPI** helper.
+- Stack: **Nuxt 2 / Vue 2** panel (Node 22, Yarn) + **Python FastAPI** helper.
 - Read next: `docs/AEBRIDGE_DESIGN.md` (route contract + as-built),
   `docs/BUILD_AND_INSTALL.md` (run/build), `docs/DISTRIBUTION.md` (how it
   reaches an artist: hosted-UI proxy, signed/notarized helper releases, the

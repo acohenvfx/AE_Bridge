@@ -20,7 +20,38 @@ os.environ["AEBRIDGE_EDL_ROOT"] = str(Path(_TMP) / "edl")
 os.environ["AEBRIDGE_TEMPLATE_ROOT"] = str(Path(_TMP) / "templates")
 os.environ["AEBRIDGE_AEP_WORK_ROOT"] = str(Path(_TMP) / "aep_work")
 
-from fastapi.testclient import TestClient  # noqa: E402
+# The /v1/aebridge routes are license-gated. These tests exercise the route
+# contract, not licensing (that's test_licensing.py), so opt out of
+# enforcement and point credential storage at an empty sandbox file. Without
+# the file backend the gate reads the developer's REAL Keychain and, if it
+# finds credentials, calls the production license service on every request.
+os.environ["AEBRIDGE_LICENSE_ENFORCED"] = "0"
+os.environ["AEBRIDGE_LICENSE_ENV"] = "local"
+os.environ["AEBRIDGE_LICENSE_CREDENTIAL_BACKEND"] = "file"
+os.environ["AEBRIDGE_LICENSE_SUPPORT_DIR"] = str(Path(_TMP) / "license")
+
+from fastapi.testclient import TestClient as _StarletteTestClient  # noqa: E402
+
+# The helper only answers requests addressed to loopback hostnames (DNS
+# rebinding guard), and TestClient's default host is "testserver".
+LOCAL_BASE_URL = "http://127.0.0.1:8010"
+
+
+class _RawTestClient(_StarletteTestClient):
+    def __init__(self, app, **kwargs):
+        kwargs.setdefault("base_url", LOCAL_BASE_URL)
+        super().__init__(app, **kwargs)
+
+
+class _SessionTestClient(_RawTestClient):
+    def __enter__(self):
+        client = super().__enter__()
+        response = client.get("/v1/session")
+        assert response.status_code == 200, response.text
+        return client
+
+
+TestClient = _SessionTestClient
 
 from service.app import app  # noqa: E402
 from service.config import settings  # noqa: E402
@@ -67,6 +98,44 @@ def test_version_and_templates():
         r = c.get("/v1/aebridge/templates")
         assert r.status_code == 200
         assert any(t["id"] == "lower_third_v2" for t in r.json())
+
+
+def test_protected_routes_require_session():
+    with _RawTestClient(app) as c:
+        assert c.get("/v1/aebridge/jobs").status_code == 401
+        assert c.get("/healthz").status_code == 200
+
+
+def test_non_loopback_host_rejected():
+    """A page whose hostname was rebound to 127.0.0.1 must not get a session
+    or reach the API: its requests carry its own hostname in Host."""
+    with _RawTestClient(app, base_url="http://attacker.example:8010") as c:
+        assert c.get("/v1/session").status_code == 400
+        assert c.get("/v1/aebridge/jobs").status_code == 400
+        assert c.get("/healthz").status_code == 400
+    for base in ("http://localhost:8010", "http://127.0.0.1:8010"):
+        with _RawTestClient(app, base_url=base) as c:
+            assert c.get("/healthz").status_code == 200
+            assert c.get("/v1/session").status_code == 200
+
+
+def test_job_id_cannot_escape_job_roots():
+    _seed_template()
+    with TestClient(app) as c:
+        response = c.post(
+            "/v1/aebridge/send",
+            json={"template_id": "__blank__", "job_id": "../../outside"},
+        )
+        assert response.status_code == 400
+
+
+def test_prepare_allocates_isolated_export_directories():
+    with TestClient(app) as c:
+        first = c.post("/v1/aebridge/prepare", json={"name": "SHOT_010"}).json()
+        second = c.post("/v1/aebridge/prepare", json={"name": "SHOT_010"}).json()
+        assert first["job_id"] != second["job_id"]
+        assert Path(first["export_dir"]).parent == settings.roots.export_root.resolve()
+        assert Path(second["export_dir"]).parent == settings.roots.export_root.resolve()
 
 
 def test_new_per_shot_roundtrip():
@@ -244,17 +313,41 @@ def test_parse_edl_deletes_avid_generated_scratch():
         _aebridge.AVID_GENERATED_EDL_ROOT = previous_router
 
 
-def test_parse_edl_leaves_a_manual_edl_alone():
-    """A path outside every known EDL root (a user's own manual EDL) must
-    survive parsing untouched — deletion is scoped to Avid-generated scratch,
-    never an arbitrary client-supplied path."""
+def test_parse_edl_can_preserve_archived_scratch_for_local_diagnosis(monkeypatch):
+    """The opt-in debug flag keeps the archived EDL without changing the
+    release default or leaving a file in Avid's filename-counter directory."""
+    import service.edl_recovery as _edl_recovery
+
+    fake_avid_root = Path(_TMP) / "fake_avid_edl_debug_exports"
+    fake_avid_root.mkdir(parents=True, exist_ok=True)
+    previous_recovery = _edl_recovery.AVID_GENERATED_EDL_ROOT
+    previous_router = _aebridge.AVID_GENERATED_EDL_ROOT
+    _edl_recovery.AVID_GENERATED_EDL_ROOT = fake_avid_root
+    _aebridge.AVID_GENERATED_EDL_ROOT = fake_avid_root
+    monkeypatch.setenv("AEBRIDGE_KEEP_EDL", "1")
+    try:
+        edl_path = fake_avid_root / "STACK_EFFECT_TEST.001.edl"
+        edl_path.write_text(_EDL_TEXT.replace("STACK_TEST", "STACK_EFFECT_TEST"), encoding="utf-8")
+        with TestClient(app) as c:
+            r = c.post("/v1/aebridge/parse-edl", json={"edl_path": str(edl_path)})
+        assert r.status_code == 200, r.text
+        assert not edl_path.exists()
+        archived = list(settings.roots.edl_root.glob("STACK_EFFECT_TEST*.edl"))
+        assert len(archived) == 1
+        archived[0].unlink()
+    finally:
+        _edl_recovery.AVID_GENERATED_EDL_ROOT = previous_recovery
+        _aebridge.AVID_GENERATED_EDL_ROOT = previous_router
+
+
+def test_parse_edl_rejects_a_manual_edl_outside_allowed_roots():
+    """EDL parsing is limited to Avid/helper-owned roots."""
     manual = Path(_TMP) / "manual_edls" / "hand_made.edl"
     manual.parent.mkdir(parents=True, exist_ok=True)
     manual.write_text(_EDL_TEXT, encoding="utf-8")
     with TestClient(app) as c:
         r = c.post("/v1/aebridge/parse-edl", json={"edl_path": str(manual)})
-    assert r.status_code == 200, r.text
-    assert [clip["clip_name"] for clip in r.json()["clips"]] == ["BASE"]
+    assert r.status_code == 400, r.text
     assert manual.exists()
 
 

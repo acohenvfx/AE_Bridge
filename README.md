@@ -44,7 +44,13 @@ use EB's helper, EB's port, or ElementalEngine. In short:
 
 ## Stack
 
-Follows the Elemental Bender architecture: **Nuxt 2 / Vue 2** panel UI (Node 16,
+AE Bridge bundles its own **Pragmatic Fox - AE Bridge EDL** List Tool preset,
+copied from the working VFX toolkit EDL configuration. Before analysis exports
+an EDL, it loads the preset through Avid's `LoadSetting` API if missing and
+verifies that Avid lists it. The preset is read-only and session-local; existing
+user presets are preserved. No manual preset import is required (MC 2023.12+).
+
+Follows the Elemental Bender architecture: **Nuxt 2 / Vue 2** panel UI (Node 22,
 Yarn) + **Python FastAPI** helper, thin `.avpi`, helper-served UI in release.
 Standalone from EB — own helper port (`8010`), no ElementalEngine.
 
@@ -62,13 +68,13 @@ Standalone from EB — own helper port (`8010`), no ElementalEngine.
 ## Quick start
 
 ```bash
-# Panel UI (Node 16)
+# Panel UI (Node 22)
 nvm use && yarn install
 yarn dev                     # http://127.0.0.1:3010/app  (hot reload)
 
 # Helper (separate terminal)
 pip install -r requirements.txt
-PYTHONPATH=. python -m service.app   # API on 127.0.0.1:8010
+PYTHONPATH=. python3 -m service.app   # API on 127.0.0.1:8010
 
 # Package the panel
 yarn build:avpi:release      # -> dist/AEBridge.avpi (release: helper serves UI)

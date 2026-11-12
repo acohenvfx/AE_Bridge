@@ -10,8 +10,8 @@
 #   1. The entry point is ota/aebridge_main.py, not service/app.py — AEBridge's
 #      service is a package using relative imports (see that file).
 #   2. pathex is the REPO root, so `import service.*` resolves as a package.
-#   3. The panel UI (dist/html) is bundled, so the helper can serve it locally
-#      when AEBRIDGE_UI_ORIGIN is unset or the hosted origin is unreachable.
+#   3. The panel UI (dist/html) is bundled, so the helper serves it locally by
+#      default whenever AEBRIDGE_UI_ORIGIN is unset.
 import os
 
 from PyInstaller.utils.hooks import collect_submodules
@@ -40,12 +40,14 @@ hiddenimports = [
     'service.routers.ui',
     'service.routers.ui_proxy',
     'service.routers.version',
+    'service.licensing',
+    'service.routers.licensing',
 ]
 
 # Third-party deps that use dynamic import or C extensions. uvicorn in
 # particular loads its loop/protocol/lifespan implementations by name at
 # runtime, so a static analysis pass alone misses them.
-for pkg in ('uvicorn', 'httpx', 'httpcore', 'fastapi', 'starlette', 'pydantic'):
+for pkg in ('uvicorn', 'httpx', 'httpcore', 'fastapi', 'starlette', 'pydantic', 'cryptography'):
     try:
         hiddenimports += collect_submodules(pkg, on_error='ignore')
     except Exception:
@@ -59,6 +61,7 @@ hiddenimports += [
 # The generated panel UI. `yarn generate:release` must have run first; the
 # build script enforces that rather than shipping a helper that 404s at /app.
 datas = []
+datas += [(os.path.join(REPO, 'service', 'license_ui'), os.path.join('service', 'license_ui'))]
 _dist_html = os.path.join(REPO, 'dist', 'html')
 if os.path.isdir(_dist_html):
     datas += [(_dist_html, os.path.join('dist', 'html'))]

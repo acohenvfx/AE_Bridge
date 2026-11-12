@@ -11,6 +11,7 @@
         </div>
       </div>
       <div class="eb-tool-head-r">
+        <a class="eb-btn eb-btn--ghost eb-btn--mini" href="http://127.0.0.1:8010/license/" target="_blank" rel="noopener">Activate / License</a>
         <!-- ONE rolled-up status pill instead of three per-service ones: the
              identity bar should say "is the bridge live?", not enumerate
              subsystems. Specifics stay in the tooltip and in Diagnostics. -->
@@ -69,7 +70,7 @@
             <button
               class="eb-btn eb-btn--ghost eb-btn--mini"
               :disabled="s.rangeAnalyzing"
-              title="Use the sequence's IN/OUT marks: one shot per anchor-track clip in the range (normally V1 — select other track heads first to analyze only those), each with its own plate stack"
+              title="Use the sequence's IN/OUT marks: one shot per anchor-track clip in the range (normally V1 — select two or more track heads to analyze only that subset), each with its own plate stack"
               @click="doAnalyzeRange"
             >{{ s.rangeAnalyzing ? 'Reading range…' : 'Analyze range' }}</button>
             <label v-if="s.stack.length" class="eb-chip" :class="{ 'is-on': s.autoGrab }" :title="'Grab each plate automatically as you solo its track in the Avid timeline'">
@@ -109,7 +110,7 @@
                 <div class="eb-mono" style="font-size:12px; overflow-wrap:anywhere">
                   {{ sh.baseName ? withAffixes(sh.baseName) : sh.clipName }}
                 </div>
-                <div class="eb-muted" style="font-size:11px">{{ sh.recIn }}–{{ sh.recOut }}</div>
+                <div class="eb-muted" style="font-size:11px">{{ sh.recIn }}–{{ sh.recOut }}<span v-if="sh.sentJobId" class="c-ok"> · sent</span></div>
               </div>
               <span class="eb-mono" style="font-size:11px; white-space:nowrap">
                 <span
@@ -437,7 +438,7 @@
                  Avid accepts the command but the enable state never moves. Kept
                  here (not in the grab flow) so it can be retested cheaply. -->
             <button
-              v-if="s.inAvid && s.stack.length && nextTrack !== null"
+              v-if="s.inAvid && s.avidHost.commandAutomation && s.stack.length && nextTrack !== null"
               class="eb-btn eb-btn--ghost eb-btn--mini"
               :disabled="grabbingAll || s.grabbingTrack !== null"
               title="Experimental: have Avid solo each track, verify its enable state, and restore the original state. Run with the timeline focused; logs a full before/after diagnosis."
@@ -498,14 +499,16 @@
 </template>
 
 <script>
+import { isolationConflicts, soloScope, conflictMessage } from '~/utils/api/trackIsolation.mjs'
 import { aebridge as state } from '~/store/toolState'
 import * as api from '~/utils/api/aebridge'
 import * as tl from '~/utils/api/timeline'
 import { getMcapiLog, clearMcapiLog, logMcapiVerbose } from '~/utils/api/mcapi'
+import { hostCapabilities } from '~/utils/api/hostCapabilities.mjs'
 
 // Bump this on every UI change so you can tell at a glance which build is loaded
 // (shown as a pill in the header + printed to the log on load).
-const UI_BUILD = '2026-08-07.1 · fix frame_count always 0'
+const UI_BUILD = '2026-08-18.2 · auto-grab starts off'
 
 // Shot polling. Every tick is 3 MCAPI calls into Media Composer, so we run
 // fast only while something is actually happening.
@@ -527,7 +530,7 @@ function sig(list) {
 export default {
   name: 'AEBridgePanel',
   data() {
-    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', autoGrabRangeStatus: '', selectingScratch: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, _idleTicks: 0, _slowSkip: 0, confirmState: { open: false, message: '', _resolve: null }, noticeState: { open: false, title: '', body: '' } }
+    return { s: state, uiBuild: UI_BUILD, picking: false, reading: false, importingId: null, logEntries: [], copied: false, autoGrabStatus: '', autoGrabRangeStatus: '', selectingScratch: false, loadingRenders: false, importingRender: null, rendersError: '', grabbingAll: false, openShots: {}, _timer: null, _shotTimer: null, _logTimer: null, _onVis: null, confirmState: { open: false, message: '', _resolve: null }, noticeState: { open: false, title: '', body: '' } }
   },
   computed: {
     logText() {
@@ -592,15 +595,16 @@ export default {
     },
     rangeReadyCount() {
       if (!this.s.range) return 0
-      return this.s.range.shots.filter((sh) => (sh.grabbed || []).length && sh.shotMeta).length
+      return this.s.range.shots.filter((sh) => (sh.grabbed || []).length && sh.shotMeta && !sh.sentJobId).length
     },
     // The identity bar answers one question: is the bridge live? Anything
     // that is NOT fine gets named, because that's the actionable case.
     statusOk() {
-      return this.s.inAvid && this.s.helper.online && this.s.ae.found
+      return this.s.inAvid && this.s.avidHost.fullSupport && this.s.helper.online && this.s.ae.found
     },
     statusSummary() {
       if (!this.s.inAvid) return 'Not in Media Composer'
+      if (!this.s.avidHost.fullSupport) return 'Media Composer 2025.12.1+ required'
       if (!this.s.helper.online) return 'Helper offline'
       if (!this.s.ae.found) return 'After Effects not found'
       return 'Helper & AE ready · MCAPI live'
@@ -611,6 +615,7 @@ export default {
         this.s.helper.online ? 'helper v' + this.s.helper.version : 'helper offline',
         this.s.ae.found ? 'AE ' + this.s.ae.version : 'AE not found — click for diagnostics',
         this.s.inAvid ? 'MCAPI live' : 'MCAPI unavailable',
+        this.s.inAvid ? 'Media Composer ' + (this.s.avidHost.appVersion || 'unknown') + ' · SDK ' + (this.s.avidHost.sdkVersion || 'unknown') : '',
         'UI ' + this.uiBuild,
       ]
       return bits.join('\n')
@@ -654,9 +659,28 @@ export default {
     }
   },
   async mounted() {
+    // Poll back-off counters. Plain instance fields, NOT data(): Vue 2 skips
+    // proxying data keys that start with `_`, so declared there they read as
+    // undefined, `+= 1` made NaN, and the idle back-off never engaged.
+    this._idleTicks = 0
+    this._slowSkip = 0
     logMcapiVerbose('UI build', { build: UI_BUILD })
+    // Never carry an armed auto-grab state into a newly opened panel. These
+    // controls are intentionally session-only; the editor opts in each time.
+    this.s.autoGrab = false
+    this.s.autoGrabRange = false
     this.restorePrefs()
     this.s.inAvid = tl.mcapiAvailable()
+    if (this.s.inAvid) {
+      try {
+        const host = await tl.getAvidHostInfo()
+        this.s.avidHost = { ...host, ...hostCapabilities(host.appVersion) }
+        logMcapiVerbose('Avid host', this.s.avidHost)
+      } catch (e) {
+        this.s.avidHost = { appVersion: '', sdkVersion: '', fullSupport: false, commandAutomation: false }
+        logMcapiVerbose('Avid host detection failed', e.message)
+      }
+    }
     await this.refreshVersion()
     await this.refreshTemplates()
     await this.refreshJobs()
@@ -702,8 +726,8 @@ export default {
     's.pollPaused'(v) { this.savePref('pollPaused', v ? '1' : '0'); if (!v) this.wakePolling() },
     // Turning auto-grab on must restore a responsive poll, or it could sit in
     // the slow lane and take seconds to notice a soloed track.
-    's.autoGrab'(v) { this.savePref('autoGrab', v ? '1' : '0'); if (v) this.wakePolling() },
-    's.autoGrabRange'(v) { this.savePref('autoGrabRange', v ? '1' : '0'); if (v) this.wakePolling() },
+    's.autoGrab'(v) { if (v) this.wakePolling() },
+    's.autoGrabRange'(v) { if (v) this.wakePolling() },
     's.autoSelectScratch'(v) { this.savePref('autoSelectScratch', v ? '1' : '0') }
   },
   methods: {
@@ -733,14 +757,15 @@ export default {
         if (g('prefix') != null) this.s.prefix = g('prefix')
         if (g('suffix') != null) this.s.suffix = g('suffix')
         if (g('projectMode')) this.s.projectMode = g('projectMode')
-        if (g('projectPath') != null) this.s.projectPath = g('projectPath')
+        if (g('projectPath') != null) {
+          this.s.projectPath = ''
+          this.savePref('projectPath', '')
+        }
         if (g('projectLabel') != null) this.s.projectLabel = g('projectLabel')
         // v2 key: the old one may hold a stale "collapsed" from when the log
         // defaulted shut, which would override the new default.
         if (g('logOpen.v2') != null) this.s.logOpen = g('logOpen.v2') === '1'
         if (g('settingsOpen') != null) this.s.settingsOpen = g('settingsOpen') === '1'
-        if (g('autoGrab') != null) this.s.autoGrab = g('autoGrab') === '1'
-        if (g('autoGrabRange') != null) this.s.autoGrabRange = g('autoGrabRange') === '1'
         if (g('autoSelectScratch') != null) this.s.autoSelectScratch = g('autoSelectScratch') === '1'
         if (g('pollPaused') != null) this.s.pollPaused = g('pollPaused') === '1'
       } catch (e) {}
@@ -904,6 +929,14 @@ export default {
         this.autoGrabStatus = 'Solo V' + this.anchorTrack + ' first — it names the stack.'
         return
       }
+      // Same rule the grab's isolation guard enforces. Without this, a
+      // non-stack track with clips elsewhere made every poll fire a grab that
+      // the guard was certain to reject.
+      const conflicts = isolationConflicts(tracks, solo)
+      if (conflicts.length) {
+        this.autoGrabStatus = conflictMessage(solo, conflicts)
+        return
+      }
       this.autoGrabStatus = ''
       await this.doGrab(solo)
     },
@@ -953,6 +986,11 @@ export default {
         this.autoGrabRangeStatus = 'Solo V' + next + ' next, not V' + solo + ' — grabbed in order so the anchor track (V' + this.s.range.anchorTrack + ') names each shot first.'
         return
       }
+      const conflicts = isolationConflicts(tracks, solo)
+      if (conflicts.length) {
+        this.autoGrabRangeStatus = conflictMessage(solo, conflicts)
+        return
+      }
       this.autoGrabRangeStatus = ''
       await this.doGrabTrackAcrossRange(solo)
     },
@@ -979,6 +1017,7 @@ export default {
       this.s.baseName = ''
       this.s.stackShot = null
       this.s.stackTC = ''
+      this.s.stackFrame = null
       this.s.stackAnchorTrack = null
       this.s.message = ''
     },
@@ -1033,6 +1072,7 @@ export default {
           if (!this.s.stackAnchorTrack) this.s.stackAnchorTrack = r.anchorTrack
         }
         this.s.stackTC = r.shot.playheadTC
+        this.s.stackFrame = Number.isInteger(r.shot.playheadFrame) ? r.shot.playheadFrame : null
         this.s.message = this.s.stack.length
           ? this.s.stack.length + ' plate(s): ' + this.s.stack.map((p) => 'V' + p.track).join(', ')
           : 'No picture under the playhead — park on a shot and Analyze again.'
@@ -1049,11 +1089,17 @@ export default {
       const seq = this.s.shot && this.s.shot.mobId
       if (!seq) { this.s.message = 'No sequence — refresh the shot first.'; return }
       const stackTracks = this.s.stack.map((p) => p.track)
-      // Remember the editor's own enable state so we can restore it.
+      // Solo across every track the isolation guard cares about — the stack
+      // AND any other video track with clips in the sequence — or a grab is
+      // rejected because e.g. V3 (clips elsewhere, no clip here) is still on.
+      // Remember the editor's own enable state for all of them to restore.
+      let scope = stackTracks
       const desired = {}
       try {
-        for (const t of await tl.getMobTrackInfo(seq)) {
-          if (stackTracks.includes(t.number)) desired[t.number] = !!t.enabled
+        const tracks = await tl.getMobTrackInfo(seq)
+        scope = soloScope(tracks, stackTracks)
+        for (const t of tracks) {
+          if (scope.includes(t.number)) desired[t.number] = !!t.enabled
         }
       } catch (e) { /* restore is best-effort */ }
 
@@ -1065,7 +1111,7 @@ export default {
         for (const p of this.s.stack) {
           if (this.isGrabbed(p.track)) continue
           this.s.message = 'Soloing V' + p.track + '…'
-          await tl.soloVideoTrack({ sequenceMobId: seq, trackNumber: p.track, stackTracks })
+          await tl.soloVideoTrack({ sequenceMobId: seq, trackNumber: p.track, stackTracks: scope })
           await this.doGrab(p.track)
           // doGrab swallows its error into s.message; stop rather than pile up.
           if (!this.isGrabbed(p.track)) {
@@ -1182,6 +1228,11 @@ export default {
           anchorTrack: this.anchorTrack,
           baseName: track === this.anchorTrack ? '' : this.s.baseName,
           targetHint,
+          // Grab the ANALYZED shot. Without these grabShot reads the live
+          // playhead, so scrubbing after Analyze exported shot B's media
+          // under shot A's name and metadata.
+          atTC: this.s.stackTC,
+          atFrame: this.s.stackFrame,
           parseEdl: (edlPath) => api.parseEdl(edlPath).then((r) => r.clips)
         })
         if (track === this.anchorTrack) {
@@ -1203,7 +1254,8 @@ export default {
     setMode(mode) {
       this.s.projectMode = mode
       this.s.projectToken = null
-      // keep projectPath/label so a remembered project survives a mode toggle
+      // Keep the label so the editor can see the last choice; the path remains
+      // helper-owned and must be picked again after a restart.
     },
     async choose() {
       this.picking = true
@@ -1213,8 +1265,10 @@ export default {
           : await api.pickProject()
         this.s.projectToken = r.target_project_token
         this.s.projectLabel = r.label
-        this.s.projectPath = r.path || ''
-        this.savePref('projectPath', this.s.projectPath)
+        // Project paths stay inside the helper. A restart requires a fresh
+        // native picker rather than persisting editorial paths in the panel.
+        this.s.projectPath = ''
+        this.savePref('projectPath', '')
         this.savePref('projectLabel', this.s.projectLabel)
       } catch (e) {
         this.s.projectLabel = 'cancelled / unavailable'
@@ -1396,8 +1450,14 @@ export default {
     // single Send, run N times. Stops on the first failure so a half-sent batch
     // is obvious rather than silently partial.
     async doSendRange() {
+      // Shots that already went out (an earlier attempt stopped partway) are
+      // skipped, or retrying after a failure duplicated their jobs and exports.
       const ready = (this.s.range ? this.s.range.shots : [])
-        .filter((sh) => (sh.grabbed || []).length && sh.shotMeta)
+        .filter((sh) => (sh.grabbed || []).length && sh.shotMeta && !sh.sentJobId)
+      if (!ready.length && this.s.range && this.s.range.shots.some((sh) => sh.sentJobId)) {
+        this.s.message = 'Every grabbed shot in this range has already been sent.'
+        return
+      }
       if (!ready.length) {
         const anchor = this.s.range ? this.s.range.anchorTrack : null
         this.s.message = 'Nothing to send — grab V' + (anchor || '1') + ' across the range first.'
@@ -1412,6 +1472,8 @@ export default {
           // eslint-disable-next-line no-await-in-loop
           const job = await this.sendOneShot(sh.shotMeta, sh.grabbed)
           if (!job) return // sendOneShot set the message
+          // $set: sentJobId is a new key on an already-reactive shot object.
+          this.$set(sh, 'sentJobId', job.job_id || true)
           sent += 1
         }
         this.s.message = 'Sent ' + sent + ' job' + (sent === 1 ? '' : 's') + ' from the marked range.'
@@ -1419,7 +1481,9 @@ export default {
         await this.selectScratchAfterSend()
         await this.refreshJobs()
       } catch (e) {
-        this.s.message = 'Range send stopped after ' + sent + ' — ' + e.message
+        const left = ready.length - sent
+        this.s.message = 'Range send stopped after ' + sent + ' — ' + e.message +
+          ' Send again to retry the remaining ' + left + ' (shots already sent are skipped).'
       } finally {
         this.s.sending = false
       }
@@ -1428,17 +1492,6 @@ export default {
     // re-register it for a fresh token so the last project sticks.
     async ensureProjectToken() {
       if (this.s.projectMode !== 'existing_project' || this.s.projectToken) return true
-      if (this.s.projectPath) {
-        try {
-          const r = await api.pickProject(this.s.projectPath)
-          this.s.projectToken = r.target_project_token
-          this.s.projectLabel = r.label
-          return true
-        } catch (e) {
-          this.s.message = 'Saved project not found (' + (this.s.projectLabel || this.s.projectPath) + ') — Choose .aep… again.'
-          return false
-        }
-      }
       this.s.message = 'Choose a project first (Choose .aep…), or switch to New project per shot.'
       return false
     },

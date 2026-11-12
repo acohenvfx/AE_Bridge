@@ -24,14 +24,14 @@ records for its own custom domain. Use the direct `*.workers.dev` hostname
 instead. AEBridge is a Worker (with a static Assets binding), not a Pages
 project, so its direct hostname is `ae-bridge.<subdomain>.workers.dev`. The
 workers.dev route was disabled by default (404s) until confirmed live and
-serving the current Git-connected build 2026-08-06 — `ota/AEBridgeLauncher.sh`
-now defaults `AEBRIDGE_UI_ORIGIN` to this hostname.
+serving the current Git-connected build 2026-08-06. It remains available as an
+explicit test channel.
 
 **This module's own default is OFF.** With `AEBRIDGE_UI_ORIGIN` unset — e.g.
 running `service.app` directly, outside the launcher — the helper serves the
 local `dist/html` build exactly as it always has (see `ui.py`).
-`ota/AEBridgeLauncher.sh` is what turns it ON for a real install, by exporting
-`AEBRIDGE_UI_ORIGIN` itself before exec'ing the helper.
+`ota/AEBridgeLauncher.sh` reads its optional `ui-channel` switch before
+exec'ing the helper. Production installs default to the bundled UI.
 """
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from .ui import CSP
+from ..auth import set_session_cookie
 
 router = APIRouter()
 
@@ -136,7 +137,7 @@ async def ui_proxy(path: str, request: Request) -> Response:
         ) from exc
 
     content_type = upstream.headers.get("content-type", "")
-    return Response(
+    response = Response(
         content=upstream.content,
         status_code=upstream.status_code,
         headers=filter_response_headers(
@@ -144,3 +145,6 @@ async def ui_proxy(path: str, request: Request) -> Response:
         ),
         media_type=content_type or None,
     )
+    if "text/html" in content_type.lower():
+        set_session_cookie(response)
+    return response

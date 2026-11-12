@@ -231,7 +231,10 @@ def prepare_comp(
     new_aep_path: Optional[Path] = None,
 ) -> tuple[Path, Path]:
     """Write the ExtendScript that builds the comp. Returns (aep_path, jsx_path)."""
-    job_dir = aep_work_root / sidecar.job_id
+    from ..paths import ensure_within, validate_job_id
+
+    validate_job_id(sidecar.job_id)
+    job_dir = ensure_within(aep_work_root / sidecar.job_id, [aep_work_root])
     job_dir.mkdir(parents=True, exist_ok=True)
 
     if project_mode == ProjectMode.existing_project:

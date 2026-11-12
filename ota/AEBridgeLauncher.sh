@@ -29,25 +29,64 @@ AEBRIDGE_REQUIRE_TEAM_ID="${AEBRIDGE_REQUIRE_TEAM_ID-RRD4N3SXSG}"
 AEBRIDGE_SKIP_UPDATE="${AEBRIDGE_SKIP_UPDATE:-0}"
 AEBRIDGE_UPDATE_TIMEOUT="${AEBRIDGE_UPDATE_TIMEOUT:-8}"
 
-# Hosted-UI proxy (see service/routers/ui_proxy.py). Points at the direct
-# workers.dev origin, confirmed live 2026-08-06 (serves the current
-# Git-connected Workers Build, not a stale cache). Must NOT be the custom
-# domain (aebridge.andrewcoheneditor.com) — that sits behind Cloudflare
-# browser verification, which Avid's WebView cannot complete. Set to the
-# empty string to fall back to the panel UI bundled inside the app (always
-# works offline) — e.g. `AEBRIDGE_UI_ORIGIN= bash AEBridgeLauncher.sh`.
-export AEBRIDGE_UI_ORIGIN="${AEBRIDGE_UI_ORIGIN-https://ae-bridge.andrewcohenvfx.workers.dev}"
+log() { printf '[AEBridgeLauncher] %s\n' "$*" >&2; }
+
+# The installed product is local-first: use the signed helper's bundled UI
+# unless the artist explicitly selects the Cloudflare test channel. This keeps
+# an outage, stale web deploy, or WebView/network-policy change from breaking
+# an otherwise healthy Avid panel. An explicit AEBRIDGE_UI_ORIGIN remains a
+# developer override. The small channel file makes switching persistent and
+# reversible without rebuilding the installer.
+AEBRIDGE_UI_CHANNEL_FILE="${AEBRIDGE_UI_CHANNEL_FILE:-$AEBRIDGE_HELPER_DIR/ui-channel}"
+AEBRIDGE_HOSTED_UI_ORIGIN="https://ae-bridge.andrewcohenvfx.workers.dev"
+if [[ "${AEBRIDGE_UI_ORIGIN+x}" != "x" ]]; then
+  ui_channel=""
+  [[ -f "$AEBRIDGE_UI_CHANNEL_FILE" ]] && ui_channel="$(tr -d '[:space:]' < "$AEBRIDGE_UI_CHANNEL_FILE" || true)"
+  case "$ui_channel" in
+    cloudflare) AEBRIDGE_UI_ORIGIN="$AEBRIDGE_HOSTED_UI_ORIGIN" ;;
+    ""|bundled) AEBRIDGE_UI_ORIGIN="" ;;
+    *)
+      log "unknown UI channel '$ui_channel'; using bundled UI"
+      AEBRIDGE_UI_ORIGIN=""
+      ;;
+  esac
+fi
+export AEBRIDGE_UI_ORIGIN
 
 # Overridable so the update path can be exercised against a local server, and
 # so an internal mirror can be used without patching the launcher.
-LATEST_BASE="${AEBRIDGE_RELEASE_BASE:-https://github.com/$AEBRIDGE_GH_REPO/releases/latest/download}"
+LATEST_BASE="${AEBRIDGE_RELEASE_BASE:-https://github.com/$AEBRIDGE_GH_REPO/releases/download/helper-latest}"
 APP_PATH="$AEBRIDGE_HELPER_APP_PATH"
 APP_BIN="$APP_PATH/Contents/MacOS/aebridge-helper"
 VERSION_FILE="$AEBRIDGE_HELPER_DIR/version.txt"
 
-log() { printf '[AEBridgeLauncher] %s\n' "$*" >&2; }
+normalize_local_version() {
+  local version="${1:-}"
+  # v0.0.3/v0.0.4 wrote the immutable Git tag into the local state file.
+  # Accept that one legacy shape long enough to migrate it to the numeric
+  # runtime version. Remote metadata remains strict so CI cannot repeat the
+  # publishing defect unnoticed.
+  version="${version#helper-v}"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  printf '%s\n' "$version"
+}
+
+semver_lt() {
+  local lhs="$1" rhs="$2"
+  local l_major l_minor l_patch r_major r_minor r_patch
+  IFS=. read -r l_major l_minor l_patch <<< "$lhs"
+  IFS=. read -r r_major r_minor r_patch <<< "$rhs"
+  (( l_major < r_major || (l_major == r_major && l_minor < r_minor) ||
+     (l_major == r_major && l_minor == r_minor && l_patch < r_patch) ))
+}
 
 machine_arch() {
+  # LaunchServices may start a universal app under Rosetta. uname then reports
+  # x86_64 even though the physical machine can run the arm64 helper.
+  if [[ "$(sysctl -in hw.optional.arm64 2>/dev/null || true)" == "1" ]]; then
+    echo arm64
+    return
+  fi
   case "$(uname -m)" in
     arm64|aarch64) echo arm64 ;;
     x86_64) echo x86_64 ;;
@@ -78,10 +117,14 @@ strip_quarantine() {
 verify_codesign() {
   local target="$1"
   if ! command -v codesign >/dev/null 2>&1; then
-    log "codesign unavailable; skipping signature check"
+    if [[ -n "$AEBRIDGE_REQUIRE_TEAM_ID" ]]; then
+      log "FATAL: codesign is unavailable and a Team ID is required"
+      return 1
+    fi
+    log "warning: codesign unavailable; signature check disabled"
     return 0
   fi
-  if ! codesign --verify --strict "$target" >/dev/null 2>&1; then
+  if ! codesign --verify --deep --strict "$target" >/dev/null 2>&1; then
     if [[ -n "$AEBRIDGE_REQUIRE_TEAM_ID" ]]; then
       log "FATAL: helper failed codesign --verify and a Team ID is required"
       return 1
@@ -107,6 +150,17 @@ install_bundle() {
   local staging="$AEBRIDGE_HELPER_DIR/.staging.$$"
   rm -rf "$staging"
   mkdir -p "$staging"
+  local member
+  while IFS= read -r member; do
+    member="${member#./}"
+    case "$member" in
+      /*|../*|*/../*|*/..|..)
+        log "FATAL: unsafe path in helper archive: $member"
+        rm -rf "$staging"
+        return 1
+        ;;
+    esac
+  done < <(tar -tzf "$archive")
   if ! tar -xzf "$archive" -C "$staging"; then
     log "FATAL: could not unpack helper archive"
     rm -rf "$staging"
@@ -142,7 +196,7 @@ install_bundle() {
 
 update_helper() {
   local max_time="${1:-$AEBRIDGE_UPDATE_TIMEOUT}"
-  local asset remote_version local_version tmp_archive expected actual http_code
+  local asset remote_version local_version local_version_raw tmp_archive expected actual http_code
 
   asset="$(arch_asset)"
   if [[ -z "$asset" ]]; then
@@ -166,10 +220,27 @@ update_helper() {
   # so a first run would otherwise print a "No such file" error before doing
   # exactly the right thing.
   local_version=""
-  [[ -f "$VERSION_FILE" ]] && local_version="$(tr -d '[:space:]' < "$VERSION_FILE" || true)"
-  if helper_installed && [[ "$remote_version" == "$local_version" ]]; then
-    log "helper up to date ($local_version)"
-    return 0
+  local_version_raw=""
+  [[ -f "$VERSION_FILE" ]] && local_version_raw="$(tr -d '[:space:]' < "$VERSION_FILE" || true)"
+  local_version="$(normalize_local_version "$local_version_raw" 2>/dev/null || true)"
+  if ! [[ "$remote_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    log "FATAL: invalid helper version: $remote_version"
+    return 1
+  fi
+  if [[ -n "$local_version" && "$local_version_raw" != "$local_version" ]]; then
+    mkdir -p "$AEBRIDGE_HELPER_DIR"
+    printf '%s\n' "$local_version" > "$VERSION_FILE"
+    log "migrated helper version record: $local_version_raw -> $local_version"
+  fi
+  if helper_installed && [[ "$local_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if [[ "$remote_version" == "$local_version" ]]; then
+      log "helper up to date ($local_version)"
+      return 0
+    fi
+    if semver_lt "$remote_version" "$local_version"; then
+      log "remote helper $remote_version is older than installed $local_version; refusing downgrade"
+      return 0
+    fi
   fi
 
   log "updating helper: '${local_version:-none}' -> '$remote_version'"
@@ -188,16 +259,16 @@ update_helper() {
   # Checksum before signature: a truncated download would otherwise surface as
   # a confusing signature failure.
   expected="$(curl -fsSL --max-time "$max_time" "$LATEST_BASE/$asset.sha256" 2>/dev/null | awk '{print $1}' || true)"
-  if [[ -n "$expected" ]]; then
-    actual="$(shasum -a 256 "$tmp_archive" | awk '{print $1}')"
-    if [[ "$expected" != "$actual" ]]; then
-      log "FATAL: checksum mismatch for $asset"
-      log "  expected $expected"
-      log "  actual   $actual"
-      return 1
-    fi
-  else
-    log "warning: no published checksum for $asset"
+  if ! [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]]; then
+    log "FATAL: no valid published checksum for $asset"
+    return 1
+  fi
+  actual="$(shasum -a 256 "$tmp_archive" | awk '{print $1}')"
+  if [[ "$expected" != "$actual" ]]; then
+    log "FATAL: checksum mismatch for $asset"
+    log "  expected $expected"
+    log "  actual   $actual"
+    return 1
   fi
 
   install_bundle "$tmp_archive" || return 1
@@ -216,6 +287,16 @@ main() {
 
   helper_installed || { log "FATAL: no helper at $APP_BIN"; exit 1; }
 
+  # Keep /v1/version aligned with the installed bundle and OTA record.
+  if [[ -z "${AEBRIDGE_RUNTIME_VERSION:-}" ]]; then
+    if [[ -f "$VERSION_FILE" ]]; then
+      AEBRIDGE_RUNTIME_VERSION="$(normalize_local_version "$(tr -d '[:space:]' < "$VERSION_FILE" || true)" 2>/dev/null || true)"
+    elif command -v /usr/libexec/PlistBuddy >/dev/null 2>&1; then
+      AEBRIDGE_RUNTIME_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist" 2>/dev/null || true)"
+    fi
+  fi
+  export AEBRIDGE_RUNTIME_VERSION
+
   # Another instance already owns the port — starting a second would fail to
   # bind and look like a crash.
   if lsof -nP -iTCP:8010 -sTCP:LISTEN >/dev/null 2>&1; then
@@ -227,4 +308,6 @@ main() {
   exec "$APP_BIN"
 }
 
-main "$@"
+if [[ "${AEBRIDGE_LAUNCHER_LIBRARY_ONLY:-0}" != "1" ]]; then
+  main "$@"
+fi

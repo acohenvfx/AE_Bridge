@@ -60,4 +60,12 @@ const FPS = 24
   assert.equal(tcToFrames('01:02:03;04', FPS), 89356)
 }
 
+{
+  // 29.97 drop-frame labels omit two frame numbers at each minute except
+  // every tenth minute.  00:01:00;02 is the first valid label after the gap.
+  assert.equal(tcToFrames('00:01:00;02', 29.97, true), 1800)
+  assert.equal(tcToFrames('00:10:00;00', 29.97, true), 17982)
+  assert.equal(tcToFrames('00:01:00:00', 29.97, false), 1800)
+}
+
 console.log('timecode: all assertions passed')

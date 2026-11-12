@@ -28,14 +28,14 @@ route, schema, path check, and the job state machine are real.
 
 ```bash
 pip install -r ../requirements.txt
-PYTHONPATH=.. python -m service.app        # serves on 127.0.0.1:8010
+PYTHONPATH=.. python3 -m service.app       # serves on 127.0.0.1:8010
 # or: PYTHONPATH=.. uvicorn service.app:app --port 8010
 ```
 
 ## Test
 
 ```bash
-PYTHONPATH=. python tests/test_smoke.py    # exercises the full round-trip
+PYTHONPATH=. python3 tests/test_smoke.py   # exercises the full round-trip
 ```
 
 Covers: version/feature detection, template listing, the new-per-shot

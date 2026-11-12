@@ -10,16 +10,41 @@ const FALLBACK = PRIMARY
 
 const DEFAULT_TIMEOUT = 15000
 const DIALOG_TIMEOUT = 5 * 60 * 1000 // native pickers wait on the user
+const sessions = new Map()
 
-async function once(base, path, opts, timeout) {
+async function ensureSession(base) {
+  const key = base || '__same-origin__'
+  if (!sessions.has(key)) {
+    const promise = fetch(base + '/v1/session', {
+      method: 'GET',
+      credentials: 'include'
+    }).then((res) => {
+      if (!res.ok) throw new Error('could not establish an AEBridge session')
+      return true
+    }).catch((error) => {
+      sessions.delete(key)
+      throw error
+    })
+    sessions.set(key, promise)
+  }
+  return sessions.get(key)
+}
+
+async function once(base, path, opts, timeout, retrying = false) {
+  if (path !== '/v1/session') await ensureSession(base)
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), timeout)
   try {
     const res = await fetch(base + path, {
       ...opts,
       signal: ctrl.signal,
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) }
     })
+    if (res.status === 401 && path !== '/v1/session' && !retrying) {
+      sessions.delete(base || '__same-origin__')
+      return once(base, path, opts, timeout, true)
+    }
     const ct = res.headers.get('content-type') || ''
     const body = ct.includes('json') ? await res.json() : await res.text()
     if (!res.ok) {

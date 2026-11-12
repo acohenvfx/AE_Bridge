@@ -46,12 +46,16 @@ jobs:
       # The helper embeds the generated panel UI, so Node is needed here too.
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: '.nvmrc'
 
       - name: Resolve version
         id: ver
         run: |
           TAG="${{ github.event.inputs.version || github.ref_name }}"
+          if [[ ! "$TAG" =~ ^helper-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::helper release must be helper-vMAJOR.MINOR.PATCH (got $TAG)"
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           # Strip the helper-v prefix for the bundle's CFBundleVersion.
           echo "version=${TAG#helper-v}" >> "$GITHUB_OUTPUT"
@@ -73,8 +77,28 @@ jobs:
       - name: Install panel dependencies
         run: yarn install --frozen-lockfile
 
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-lock.txt pytest
+
+      - name: Run release gates
+        run: |
+          yarn audit:production
+          yarn lint
+          PYTHONPATH=. python -m pytest -q
+          node tests/test_timecode.mjs
+          node tests/test_edl_plan.mjs
+          node tests/test_plate_offsets.mjs
+          node tests/test_track_selection.mjs
+          node tests/test_host_capabilities.mjs
+          node tests/test_beta_download.mjs
+          python tests/test_installer_lifecycle.py
+          python -m pytest -q tests/test_ota_release.py
+
       - name: Build panel UI
         run: yarn generate:release
+
+      - name: Inspect release bundle
+        run: yarn check:release-bundle
 
       - name: Build helper bundle
         env:
@@ -127,36 +151,58 @@ jobs:
           ( cd out && shasum -a 256 "AEBridgeHelper-${{ matrix.arch }}.tar.gz" \
               | awk '{print $1}' > "AEBridgeHelper-${{ matrix.arch }}.tar.gz.sha256" )
 
-      - name: Upload architecture assets
-        uses: softprops/action-gh-release@v2
+      - name: Upload architecture assets for publication
+        uses: actions/upload-artifact@v4
         with:
-          repository: acohenvfx/AE_Bridge_Releases
-          token: ${{ secrets.RELEASES_REPO_PAT }}
-          tag_name: ${{ steps.ver.outputs.tag }}
-          make_latest: true
-          files: |
-            out/AEBridgeHelper-${{ matrix.arch }}.tar.gz
-            out/AEBridgeHelper-${{ matrix.arch }}.tar.gz.sha256
+          name: helper-${{ matrix.arch }}
+          path: out/*
+          if-no-files-found: error
 
-  # Published only after BOTH architectures succeed: the launcher treats
-  # version.txt as "an update is available for my arch", so publishing it while
-  # one arch is missing would send those machines to a 404.
-  publish-version:
+  # Publish only after BOTH architectures succeed. The immutable version tag
+  # is retained for rollback/audit; helper-latest is the updater's isolated,
+  # mutable channel and always receives all five files as one job.
+  publish:
     needs: build
     runs-on: ubuntu-latest
     steps:
       - name: Resolve version
         id: ver
-        run: echo "tag=${{ github.event.inputs.version || github.ref_name }}" >> "$GITHUB_OUTPUT"
+        run: |
+          TAG="${{ github.event.inputs.version || github.ref_name }}"
+          if [[ ! "$TAG" =~ ^helper-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::helper release must be helper-vMAJOR.MINOR.PATCH (got $TAG)"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#helper-v}" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: helper-*
+          path: out
+          merge-multiple: true
       - name: Write version.txt
-        run: printf '%s' "${{ steps.ver.outputs.tag }}" > version.txt
-      - uses: softprops/action-gh-release@v2
+        run: |
+          printf '%s\n' "${{ steps.ver.outputs.version }}" > out/version.txt
+          test "$(find out -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
+      - name: Publish immutable helper release
+        uses: softprops/action-gh-release@v2
         with:
           repository: acohenvfx/AE_Bridge_Releases
           token: ${{ secrets.RELEASES_REPO_PAT }}
           tag_name: ${{ steps.ver.outputs.tag }}
-          make_latest: true
-          files: version.txt
+          make_latest: false
+          overwrite_files: true
+          files: out/*
+      - name: Publish stable OTA channel
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: acohenvfx/AE_Bridge_Releases
+          token: ${{ secrets.RELEASES_REPO_PAT }}
+          tag_name: helper-latest
+          name: AEBridge helper stable channel
+          make_latest: false
+          overwrite_files: true
+          files: out/*
 
 # Required secrets on acohenvfx/AE_Bridge (the same ones DifferenceEngine uses,
 # except the PAT must grant access to AE_Bridge_Releases):

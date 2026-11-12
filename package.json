@@ -1,37 +1,44 @@
 {
   "name": "aebridge-panel",
-  "version": "0.0.1",
+  "version": "1.0.1",
   "private": true,
   "description": "AEBridge \u2014 Avid Media Composer <-> After Effects round-trip panel",
   "scripts": {
     "dev": "nuxt --port 3010 --hostname 127.0.0.1",
     "build": "nuxt build",
-    "start": "nuxt start --port 3010 --hostname 127.0.0.1",
     "generate": "nuxt generate",
     "generate:release": "AEB_RELEASE=1 nuxt generate",
     "build:cloudflare": "AEB_RELEASE=1 nuxt generate",
     "build:panel": "node build/panel.mjs",
     "build:avpi:release": "AEB_RELEASE=1 node build/panel.mjs",
     "build:copy": "node build/copy.mjs --run",
+    "audit:production": "yarn audit --groups dependencies --level high",
     "lint": "eslint --ext .js,.mjs,.vue --ignore-path .gitignore .",
     "format": "prettier --write .",
     "check:tpl": "node tools/check-vue-template.js src/components/AEBridgePanel.vue",
-    "test:edl": "node tests/test_edl_plan.mjs",
+    "check:release-bundle": "node tools/check-release-bundle.mjs",
+    "test:edl": "node tests/test_edl_plan.mjs && node tests/test_edl_settings.mjs",
     "test:offsets": "node tests/test_plate_offsets.mjs",
     "test:tc": "node tests/test_timecode.mjs",
     "test:tracksel": "node tests/test_track_selection.mjs"
   },
   "dependencies": {
     "google-protobuf": "^3.21.4",
-    "grpc-web": "^1.5.0",
-    "nuxt": "2.15.8"
+    "grpc-web": "^1.5.0"
   },
   "devDependencies": {
-    "@babel/plugin-proposal-private-property-in-object": "7.21.11",
+    "eslint": "8.57.1",
+    "eslint-plugin-vue": "9.33.0",
+    "nuxt": "2.18.1",
     "sass": "1.32.13",
-    "sass-loader": "10.1.1"
+    "sass-loader": "10.4.1"
   },
   "engines": {
-    "node": "16.20.2"
+    "node": "22.23.1"
+  },
+  "resolutions": {
+    "nanoid": "3.3.18",
+    "tar": "7.5.21",
+    "tmp": "0.2.7"
   }
 }

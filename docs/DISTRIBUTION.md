@@ -6,10 +6,10 @@ they are not accidental.
 
 ## The two update channels
 
-**Panel UI — continuous, no release needed.** The helper serves the panel at
-`http://localhost:8010/app`. Set `AEBRIDGE_UI_ORIGIN` and it instead proxies a
-hosted build (`service/routers/ui_proxy.py`), so publishing to Cloudflare
-updates every artist on their next panel open.
+**Panel UI — bundled by default.** The helper serves the tested panel at
+`http://localhost:8010/app`. The Cloudflare build remains an opt-in test
+channel through `service/routers/ui_proxy.py`; it is not allowed to replace a
+working installed UI merely because a network origin changed.
 
 This is a proxy rather than pointing the panel's manifest at the hosted URL
 because **the `.avpi` manifest is signed** — `url` and `allowedDomains` live
@@ -17,6 +17,16 @@ inside it, so changing either means re-signing with Avid. It also sidesteps
 mixed content (an HTTPS page cannot call `http://127.0.0.1:8010`), Private
 Network Access preflights, and CORS, since the WebView only ever sees
 `http://localhost:8010`.
+
+Switch an installed helper without reinstalling, then restart only the helper:
+
+```bash
+CHANNEL="$HOME/Library/Application Support/AEBridge/helper/ui-channel"
+mkdir -p "$(dirname "$CHANNEL")"
+printf 'cloudflare\n' > "$CHANNEL"  # opt into the hosted test UI
+# printf 'bundled\n' > "$CHANNEL"   # return to the RC-bundled UI
+launchctl kickstart -kp "gui/$(id -u)/com.acohenvfx.aebridge.helper"
+```
 
 **Helper binary — tagged releases.** `git tag helper-vX.Y.Z && git push --tags`
 runs `.github/workflows/release-helper.yml`, which builds, signs and notarizes
@@ -74,11 +84,11 @@ checked" rather than a mismatch.
    confirmed 2026-08-06.** `ae-bridge.andrewcohenvfx.workers.dev` now returns
    `200` and serves the real Nuxt build (`/app` → `/app/` → the panel HTML),
    verified against `wrangler deployments list --name ae-bridge`'s latest
-   entry, not a stale cache. `ota/AEBridgeLauncher.sh` now defaults
-   `AEBRIDGE_UI_ORIGIN` to this origin (was previously left empty with a TODO
-   comment) — proxying through it was verified end-to-end on a throwaway
-   local helper instance the same day. Set `AEBRIDGE_UI_ORIGIN=` (empty) to
-   opt back out to the bundled local UI.
+   entry, not a stale cache. Proxying through it was verified end-to-end on a
+   throwaway local helper instance the same day. RC1 deliberately defaults
+   back to the bundled UI after online-first installs proved less reliable.
+   Write `cloudflare` to the helper's `ui-channel` file to opt in; write
+   `bundled` (or remove the file) to return immediately.
 3. **Ship the signed `.avpi`**, not `dist/AEBridge.avpi` — the dev build points
    at `localhost:3010`. Pass `AEBRIDGE_AVPI=/path/to/signed.avpi`.
 4. **Have working notary credentials before running `make-dmg.sh`.** Signing is

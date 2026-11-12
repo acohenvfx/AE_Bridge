@@ -9,7 +9,7 @@ export const aebridge = Vue.observable({
   projectMode: 'new_per_shot', // or 'existing_project'
   projectToken: null,
   projectLabel: '',
-  projectPath: '', // remembered across restarts; re-registered for a fresh token
+  projectPath: '', // intentionally blank; project paths stay inside the helper
   templates: [],
   jobs: [],
   helper: { online: false, version: null },
@@ -18,6 +18,7 @@ export const aebridge = Vue.observable({
   helperFeatures: [],
   ae: { found: false, version: null },
   inAvid: false,
+  avidHost: { appVersion: '', sdkVersion: '', fullSupport: false, commandAutomation: false },
   shot: null,
   shotMessage: '',
   exportSettings: [],
@@ -32,6 +33,10 @@ export const aebridge = Vue.observable({
   // track and it isolates exactly one per grab.
   stack: [],
   stackTC: '',
+  // Sequence-relative frame of the analyzed playhead. Grabs use this (with
+  // stackTC), not the live playhead, so scrubbing after Analyze can't export
+  // a different shot's media under this stack's names.
+  stackFrame: null,
   // Which track NAMES the stack — ordinarily V1, but selecting specific track
   // heads in Avid before Analyze (see trackSelection.mjs) can narrow the scan
   // to any subset, in which case the lowest one becomes the anchor. Set once
@@ -48,17 +53,15 @@ export const aebridge = Vue.observable({
   stackShot: null,
   analyzing: false,
   grabbingTrack: null,
-  // ON by default: Avid won't let the panel drive the track selectors (see
-  // HANDOFF), so soloing is manual — and watching for it is strictly better
-  // than making the user come back to the panel between each track.
-  autoGrab: true,
+  // Session-only safety control: always starts OFF when the panel opens. The
+  // editor can enable it after reviewing the analyzed stack, but a previous
+  // session must never begin grabbing merely because a track is already soloed.
+  autoGrab: false,
   // Same idea, for the range flow: watch the enable state and grab a track
   // ACROSS EVERY SHOT the moment it's soloed, instead of requiring the
-  // "Grab V<n> for all shots" button each time. ON by default for the same
-  // reason as autoGrab — the panel still cannot drive Avid's track selectors,
-  // and a range multiplies the number of manual round trips a batch would
-  // otherwise cost.
-  autoGrabRange: true,
+  // "Grab V<n> for all shots" button each time. Like stack auto-grab, this is
+  // session-only and always starts OFF.
+  autoGrabRange: false,
   // MCAPI has no delete-mob RPC, so a subclip can never be removed
   // programmatically — the only lever is selecting AEBridge_Scratch's
   // subclips (selectScratchSubclips) so a human can press Delete themselves.
@@ -80,7 +83,7 @@ export const aebridge = Vue.observable({
   // Hard stop on the shot poll. MCAPI has no push events so the readout needs
   // polling, but the editor should be able to silence it outright.
   pollPaused: false,
-  // Everything in the shared render folder, so extra versions of a comp are
-  // visible and importable even though no job is watching for them.
+  // Every job has a private render folder; extra versions remain visible and
+  // importable even though the watcher matches only the first completed one.
   renders: []
 })

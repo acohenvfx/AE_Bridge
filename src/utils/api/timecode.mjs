@@ -12,13 +12,20 @@
 // Deliberately STRICT — anything without all four fields returns 0. A position
 // that lost a field is a real bug (the two-frame-spaces trap in HANDOFF.md
 // costs hours), so it must not be quietly reinterpreted.
-export function tcToFrames(tc, fps) {
+export function tcToFrames(tc, fps, dropFrame = false) {
   const p = String(tc || '')
     .split(/[:;]/)
     .map((n) => parseInt(n, 10))
   if (p.length < 4 || p.some(isNaN)) return 0
   const [hh, mm, ss, ff] = p
-  return ((hh * 60 + mm) * 60 + ss) * fps + ff
+  const nominal = Math.round(Number(fps) || 0)
+  let frames = ((hh * 60 + mm) * 60 + ss) * nominal + ff
+  if (dropFrame && (nominal === 30 || nominal === 60)) {
+    const drop = nominal === 30 ? 2 : 4
+    const totalMinutes = hh * 60 + mm
+    frames -= drop * (totalMinutes - Math.floor(totalMinutes / 10))
+  }
+  return frames
 }
 
 // A DURATION, which Avid writes RIGHT-ALIGNED with leading fields omitted:

@@ -4,6 +4,7 @@ import os
 import tempfile
 import zipfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 _TMP = tempfile.mkdtemp(prefix="aebridge_uitest_")
 os.environ["AEBRIDGE_HOME"] = _TMP
@@ -24,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_app_page_served():
     settings.roots.ensure()
     (settings.roots.template_root / "lower_third_v2.aep").write_bytes(b"T")
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://localhost:8010") as c:
         r = c.get("/app")
         assert r.status_code == 200
         assert "AEBridge" in r.text
@@ -43,7 +44,7 @@ def test_manifest_generated():
     manifest = json.loads(mpath.read_text())
     assert manifest["name"] == "com.acohenvfx.aebridge"
     url = manifest["uiItems"][0]["url"]
-    assert url.endswith("/app")  # dev :3006 or release :8010
+    assert urlparse(url).path == "/app"
     assert any("8010" in d for d in manifest["allowedDomains"])
 
 

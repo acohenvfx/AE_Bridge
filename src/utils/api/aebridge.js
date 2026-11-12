@@ -6,8 +6,8 @@ export const getAeStatus = () => getJSON('/v1/aebridge/ae')
 export const listTemplates = () => getJSON('/v1/aebridge/templates')
 export const listJobs = () => getJSON('/v1/aebridge/jobs')
 
-// Opens the helper's native .aep picker (no path), or re-registers a remembered
-// path (path given) to get a fresh token without a dialog.
+// Opens the helper's native .aep picker. The optional path remains a dev/test
+// seam but the helper never returns the raw editorial path to the panel.
 export const pickProject = (path) =>
   path
     ? postJSON('/v1/aebridge/pick-project?path=' + encodeURIComponent(path))
@@ -23,11 +23,11 @@ export const clearJobs = (all = false) =>
   postJSON('/v1/aebridge/jobs/clear' + (all ? '?all=true' : ''))
 // Move a job to `error` so "Clear finished" will sweep it up.
 export const cancelJob = (jobId) => postJSON(`/v1/aebridge/jobs/${jobId}/cancel`)
-// Hard reset: drop every job whatever its state, and forget which renders were
-// imported. Files on disk are untouched.
+// Hard reset: drop every job whatever its state. Files and import history are
+// untouched.
 export const hardReset = () => postJSON('/v1/aebridge/reset')
-// Everything in the shared render folder — including extra versions AE emitted
-// from one comp, which the per-job watcher never sees.
+// Every job-scoped render folder, including extra versions AE emitted from one
+// comp, which the per-job watcher never sees.
 export const listRenders = () => getJSON('/v1/aebridge/renders')
 export const markRenderImported = (path) =>
   postJSON('/v1/aebridge/renders/imported', { path })

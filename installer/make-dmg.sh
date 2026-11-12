@@ -6,8 +6,13 @@
 #
 # Inputs (all optional except the launcher, which lives in the repo):
 #   dist/AEBridgeHelper.app   seed helper   (build with ota/build-helper.sh)
-#   dist/AEBridge.avpi        panel         (build with yarn build:panel), or
+#   dist/AEBridge_v1.0.0.avpi
+#                             Avid-signed production panel, or
 #                             AEBRIDGE_AVPI=/path/to/signed.avpi
+#   Assets/AE_Bridge_User_Guide.pdf
+#                             user manual, placed at the top level of the
+#                             DMG next to the installer, or
+#                             AEBRIDGE_USER_GUIDE=/path/to/guide.pdf
 #
 # SIGNED AND NOTARIZED BY DEFAULT. The signing identity is auto-detected, and
 # signing implies notarizing — there is deliberately no way to produce a signed
@@ -50,6 +55,18 @@ VOL_NAME="AEBridge"
 LABEL="com.acohenvfx.aebridge.helper"
 
 VERSION="${AEBRIDGE_RUNTIME_VERSION:-$(python3 -c 'import json;print(json.load(open("package.json"))["version"])')}"
+# shellcheck source=installer/versioning.sh
+source installer/versioning.sh
+BUNDLE_VERSION="$(aebridge_bundle_version "$VERSION" "${AEBRIDGE_BUNDLE_VERSION:-}")" || {
+  echo "FATAL: release version '$VERSION' cannot be converted to a numeric CFBundleVersion" >&2
+  echo "       Use X.Y.Z, X.Y.Z-rc.N, or set AEBRIDGE_BUNDLE_VERSION explicitly." >&2
+  exit 1
+}
+HELPER_VERSION="${AEBRIDGE_HELPER_VERSION:-${VERSION%%-*}}"
+[[ "$HELPER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+  echo "FATAL: helper version must be numeric MAJOR.MINOR.PATCH (got '$HELPER_VERSION')" >&2
+  exit 1
+}
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
@@ -65,6 +82,79 @@ NOTARY_ARGS=()
 # re-stored three times and, as of 2026-08-06, all three had gone stale (401)
 # while the CI secret stayed valid.
 NOTARY_PROFILE_DEFAULT="ACNOTARY"
+
+# The Avid-signed package is intentionally stable even when the surrounding
+# helper/installer version changes. Do not fall back to a similarly named AVPI:
+# AEBridge_Remote.avpi is an older loader whose manifest opens the public
+# download page and labels the Tools item "AEBridge Remote".
+AVPI="${AEBRIDGE_AVPI:-dist/AEBridge_v1.0.0.avpi}"
+HELPER_ARM64="${AEBRIDGE_HELPER_ARM64:-dist/helper-seeds/arm64/AEBridgeHelper.app}"
+HELPER_X86_64="${AEBRIDGE_HELPER_X86_64:-dist/helper-seeds/x86_64/AEBridgeHelper.app}"
+USER_GUIDE="${AEBRIDGE_USER_GUIDE:-Assets/AE_Bridge_User_Guide.pdf}"
+USER_GUIDE_NAME="AE Bridge User Guide.pdf"
+
+# The user guide ships in every DMG. Fail before any signing or notarizing
+# work rather than produce a finished-looking image without the manual.
+[[ -f "$USER_GUIDE" ]] || {
+  echo "FATAL: user guide not found: $USER_GUIDE" >&2
+  echo "       Set AEBRIDGE_USER_GUIDE=/path/to/guide.pdf to override." >&2
+  exit 1
+}
+head -c 5 "$USER_GUIDE" | grep -q '%PDF-' || {
+  echo "FATAL: user guide is not a PDF: $USER_GUIDE" >&2
+  exit 1
+}
+
+validate_release_avpi() {
+  local avpi="$1" manifest comment
+  [[ -f "$avpi" ]] || {
+    echo "FATAL: required Avid-signed panel not found: $avpi" >&2
+    return 1
+  }
+  unzip -tqq "$avpi" >/dev/null || {
+    echo "FATAL: panel package is not a valid AVPI zip: $avpi" >&2
+    return 1
+  }
+  manifest="$(unzip -p "$avpi" avid-manifest.json 2>/dev/null)"
+  [[ "$manifest" == *'"name": "com.acohenvfx.aebridge"'* \
+    && "$manifest" == *'"displayName": "AEBridge"'* \
+    && "$manifest" == *'"displayText": "AEBridge"'* \
+    && "$manifest" == *'"windowTitle": "AEBridge"'* \
+    && "$manifest" == *'"url": "http://localhost:8010/app"'* ]] || {
+    echo "FATAL: AVPI manifest must identify AEBridge and open http://localhost:8010/app" >&2
+    return 1
+  }
+  comment="$(unzip -z "$avpi" 2>/dev/null)"
+  [[ "$comment" == *'<ds:Signature '* \
+    && "$comment" == *'<ds:X509Certificate>'* ]] || {
+    echo "FATAL: AVPI does not contain an Avid XML signature and certificate" >&2
+    return 1
+  }
+}
+
+validate_helper_seed() {
+  local arch="$1" app="$2" expected_version="$3" binary team actual_version
+  binary="$app/Contents/MacOS/aebridge-helper"
+  [[ -x "$binary" ]] || { echo "FATAL: missing $arch helper seed: $app" >&2; return 1; }
+  lipo -archs "$binary" 2>/dev/null | tr ' ' '\n' | grep -qx "$arch" || {
+    echo "FATAL: helper seed at $app does not contain $arch" >&2
+    return 1
+  }
+  codesign --verify --deep --strict "$app" >/dev/null 2>&1 || {
+    echo "FATAL: helper seed at $app has an invalid signature" >&2
+    return 1
+  }
+  team="$(codesign -dv --verbose=4 "$app" 2>&1 | awk -F= '/^TeamIdentifier=/{print $2; exit}')"
+  [[ "$team" == "RRD4N3SXSG" ]] || {
+    echo "FATAL: helper seed at $app has Team ID '${team:-none}', expected RRD4N3SXSG" >&2
+    return 1
+  }
+  actual_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist" 2>/dev/null || true)"
+  [[ "$actual_version" == "$expected_version" ]] || {
+    echo "FATAL: $arch helper seed is version '${actual_version:-unknown}', expected $expected_version" >&2
+    return 1
+  }
+}
 
 # --- preflight ---------------------------------------------------------------
 # Everything that can be known up front is checked here, before a build that
@@ -149,6 +239,19 @@ NOCREDS
   fi
 fi
 
+# Catch a wrong panel before compiling, signing, and notarizing two apps. This
+# is a release identity check, not just a presence check: v0.0.5 shipped the
+# older Remote manifest because its filename looked plausible.
+validate_release_avpi "$AVPI"
+if [[ -d "$HELPER_ARM64" && -d "$HELPER_X86_64" ]]; then
+  validate_helper_seed arm64 "$HELPER_ARM64" "$HELPER_VERSION"
+  validate_helper_seed x86_64 "$HELPER_X86_64" "$HELPER_VERSION"
+elif [[ -n "$SIGN_IDENTITY" ]]; then
+  echo "FATAL: signed release requires both helper architectures." >&2
+  echo "       Run: bash ota/stage-helper-seeds.sh $HELPER_VERSION" >&2
+  exit 1
+fi
+
 # Submit to Apple, staple the ticket into the artifact, and prove it took.
 # Stapling is what makes the result work OFFLINE — without it Gatekeeper needs
 # to reach Apple to discover the notarization, which an edit bay may not be
@@ -172,16 +275,19 @@ notarize_and_staple() {
   xcrun stapler validate "$target"
 }
 
+# Regenerate from the product artwork for every build so both app bundles
+# receive the current icon rather than a stale checked-in conversion.
+bash installer/make-icns.sh
+
 APP="$STAGE/$APP_NAME.app"
 RES="$APP/Contents/Resources"
 mkdir -p "$APP/Contents/MacOS" "$RES/helper" "$RES/avpi"
 
-# A plain script-backed .app rather than an Xcode project: the installer's UI is
-# native dialogs and a Cocoa progress window driven from the shell, so a
-# compiled binary would add a build dependency for no benefit. Same shape as
-# DifferenceEngine's and ElementalBender's installers.
+# The installer uses the same small native launcher as Elemental Bender. It
+# keeps the shell workflow attached to a normal foreground macOS app, giving
+# dialogs a consistent owner plus a Dock icon and Cmd-Tab entry.
 make_app_bundle() {
-  local app="$1" name="$2" bundle_id="$3" exe="$4" body_src="$5" body_name="$6"
+  local app="$1" name="$2" bundle_id="$3" exe="$4" body_src="$5" body_name="$6" launcher_src="${7:-}"
   local res="$app/Contents/Resources"
   mkdir -p "$app/Contents/MacOS" "$res"
 
@@ -196,22 +302,30 @@ make_app_bundle() {
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
-    <key>CFBundleVersion</key><string>$VERSION</string>
+    <key>CFBundleVersion</key><string>$BUNDLE_VERSION</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
 PLIST
 
-  # The executable is a thin shim: Finder needs a fixed CFBundleExecutable name,
-  # while the real body lives in Resources where it can be replaced without
-  # touching the bundle's identity.
-  cat > "$app/Contents/MacOS/$exe" <<SHIM
+  if [[ -n "$launcher_src" ]]; then
+    local arm_launcher="$app/Contents/MacOS/$exe.arm64"
+    local intel_launcher="$app/Contents/MacOS/$exe.x86_64"
+    swiftc -O -target arm64-apple-macos13.0 -o "$arm_launcher" "$launcher_src"
+    swiftc -O -target x86_64-apple-macos13.0 -o "$intel_launcher" "$launcher_src"
+    lipo -create "$arm_launcher" "$intel_launcher" -output "$app/Contents/MacOS/$exe"
+    rm -f "$arm_launcher" "$intel_launcher"
+  else
+    # The uninstaller remains a thin script shim; it has one confirmation
+    # dialog and does not need a long-lived foreground app process.
+    cat > "$app/Contents/MacOS/$exe" <<SHIM
 #!/usr/bin/env bash
 set -euo pipefail
 HERE="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 exec /bin/bash "\$HERE/../Resources/$body_name"
 SHIM
+  fi
   chmod +x "$app/Contents/MacOS/$exe"
 
   cp "$body_src" "$res/$body_name"
@@ -221,7 +335,8 @@ SHIM
 }
 
 make_app_bundle "$APP" "$APP_NAME" "com.acohenvfx.aebridge.installer" \
-  "AEBridgeInstaller" "installer/app-main.sh" "app-main.sh"
+  "AEBridgeInstaller" "installer/app-main.sh" "installer-main.sh" \
+  "installer/installer-launcher.swift"
 
 # --- uninstaller app ---------------------------------------------------------
 # Ships beside the installer in the DMG, as in EB and DE. Without it the only
@@ -238,23 +353,23 @@ cp "ota/$LABEL.plist.template" "$RES/$LABEL.plist.template"
 cp installer/install-progress.js "$RES/install-progress.js"
 chmod +x "$RES/AEBridgeLauncher.sh"
 
-if [[ -d dist/AEBridgeHelper.app ]]; then
-  echo "seeding helper from dist/AEBridgeHelper.app"
+if [[ -d "$HELPER_ARM64" && -d "$HELPER_X86_64" ]]; then
+  echo "seeding signed arm64 and x86_64 helpers"
+  mkdir -p "$RES/helper/arm64" "$RES/helper/x86_64"
+  ditto "$HELPER_ARM64" "$RES/helper/arm64/AEBridgeHelper.app"
+  ditto "$HELPER_X86_64" "$RES/helper/x86_64/AEBridgeHelper.app"
+elif [[ -z "$SIGN_IDENTITY" && -d dist/AEBridgeHelper.app ]]; then
+  echo "seeding one development helper from dist/AEBridgeHelper.app"
   cp -R dist/AEBridgeHelper.app "$RES/helper/"
 else
-  echo "WARNING: dist/AEBridgeHelper.app not found — the DMG will have no seeded"
-  echo "         helper and first launch will require internet."
+  echo "FATAL: release DMG requires signed arm64 and x86_64 helper seeds." >&2
+  echo "       Run: bash ota/stage-helper-seeds.sh <helper-version>" >&2
+  exit 1
 fi
 
-AVPI="${AEBRIDGE_AVPI:-dist/AEBridge.avpi}"
-AVPI_NAME=""
-if [[ -f "$AVPI" ]]; then
-  AVPI_NAME="$(basename "$AVPI")"
-  echo "including panel: $AVPI"
-  cp "$AVPI" "$RES/avpi/"
-else
-  echo "WARNING: no .avpi found at $AVPI — the panel will not be installed."
-fi
+AVPI_NAME="$(basename "$AVPI")"
+echo "including Avid-signed panel: $AVPI"
+cp "$AVPI" "$RES/avpi/"
 
 # The uninstaller cannot guess the panel's filename (it carries a version), so
 # bake in the one this DMG ships. Its own fallback glob still catches panels
@@ -299,6 +414,7 @@ else
 fi
 
 ln -s /Applications "$STAGE/Applications" 2>/dev/null || true
+cp "$USER_GUIDE" "$STAGE/$USER_GUIDE_NAME"
 
 # --- disk image --------------------------------------------------------------
 mkdir -p dist
@@ -316,6 +432,7 @@ MOUNT="$(mktemp -d)"
 hdiutil attach "$DMG_RW" -mountpoint "$MOUNT" -nobrowse -noverify -noautoopen >/dev/null
 cp -R "$STAGE/$APP_NAME.app" "$MOUNT/"
 cp -R "$UNINSTALL_APP" "$MOUNT/"
+cp "$STAGE/$USER_GUIDE_NAME" "$MOUNT/"
 [[ -L "$STAGE/Applications" ]] && ln -s /Applications "$MOUNT/Applications" 2>/dev/null || true
 hdiutil detach "$MOUNT" -force >/dev/null
 rmdir "$MOUNT" 2>/dev/null || true
@@ -345,12 +462,17 @@ if [[ -n "$SIGN_IDENTITY" ]]; then
     fi
     xcrun stapler validate "$VERIFY_MOUNT/$checked.app" || { VERIFY_FAILED="$checked.app"; break; }
   done
+  [[ -n "$VERIFY_FAILED" || -f "$VERIFY_MOUNT/$USER_GUIDE_NAME" ]] || {
+    echo "FATAL: $USER_GUIDE_NAME is missing from the finished DMG" >&2
+    VERIFY_GUIDE_MISSING=1
+  }
   hdiutil detach "$VERIFY_MOUNT" -force >/dev/null
   rmdir "$VERIFY_MOUNT" 2>/dev/null || true
   if [[ -n "$VERIFY_FAILED" ]]; then
     echo "FATAL: $VERIFY_FAILED inside the DMG is not Gatekeeper-approved" >&2
     exit 1
   fi
+  [[ -z "${VERIFY_GUIDE_MISSING:-}" ]] || exit 1
   echo "OK: DMG, installer and uninstaller are signed, notarized and stapled."
 fi
 

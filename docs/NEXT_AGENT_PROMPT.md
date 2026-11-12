@@ -137,10 +137,9 @@ Summary of what exists and what it changed:
   **RESOLVED 2026-08-06: the workers.dev route is live** —
   `ae-bridge.andrewcohenvfx.workers.dev` returns `200` and serves the current
   Git-connected build (checked against `wrangler deployments list`, not a
-  stale cache). `ota/AEBridgeLauncher.sh` now **defaults**
-  `AEBRIDGE_UI_ORIGIN` to that origin (verified proxying end-to-end on a
-  throwaway local helper instance); set it to the empty string to opt back
-  out to the bundled local UI.
+  stale cache). Proxying was verified end-to-end on a throwaway local helper
+  instance. RC1 later returned to a **bundled-UI default** for reliability;
+  the launcher's `ui-channel` file can opt into `cloudflare` without rebuilding.
 - **AEBridge's hosted UI is a Worker with a static Assets binding, not a Pages
   project** (that is DE). Hence `wrangler.jsonc` here, and Git-connected
   Cloudflare Workers Builds rather than a GitHub Action.
@@ -235,11 +234,9 @@ Implemented but **NOT YET RUN IN AVID** — test these three first:
    (rate/resolution/frame-count check on the AE render) is still unverified
    end to end; the probe's numbers were checked against ffprobe on existing
    files, not through a live Send → render → Import round trip.
-4. ~~Enable the `workers.dev` Cloudflare route~~ — **DONE 2026-08-06**, OTA UI
-   updates are now wired up by default (`AEBRIDGE_UI_ORIGIN` in
-   `ota/AEBridgeLauncher.sh`). Worth a real install to confirm the proxy
-   behaves the same inside the actual launchd-run helper, not just the
-   throwaway instance this was checked against.
+4. ~~Enable the `workers.dev` Cloudflare route~~ — **DONE 2026-08-06**. The
+   hosted UI is preserved as an opt-in test channel; installed RC builds use
+   their bundled UI by default.
 5. ~~Cut a first real (non-test) `helper-v*` release tag~~ — **DONE 2026-08-06:
    `helper-v0.0.3`**, published to `acohenvfx/AE_Bridge_Releases` with both
    architectures. Note: the `on: push: tags:` trigger did not fire for this

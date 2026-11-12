@@ -1,6 +1,6 @@
 # AEBridge — Build & Install
 
-AEBridge is a **Nuxt 2 / Vue 2** panel (Node 16, Yarn) plus a **Python FastAPI**
+AEBridge is a **Nuxt 2 / Vue 2** panel (Node 22, Yarn) plus a **Python FastAPI**
 helper, following the Elemental Bender architecture. It ships as a **thin
 `.avpi`** (manifest + icon). In release the panel UI is served by the helper at
 `http://localhost:8010/app`, same-origin with the `/v1` API — so editorial data
@@ -10,41 +10,40 @@ Two independent delivery paths, same as EB: **UI** (Nuxt) and **helper** (Python
 
 ## Prerequisites
 
-- **Node 16** (`.nvmrc` pins 16.20.2) + **Yarn** for the panel UI.
+- **Node 22** (`.nvmrc` pins 22.23.1) + **Yarn** for the panel UI.
 - **Python 3** for the helper.
 
 ## Compatibility (Media Composer versions)
 
-**Minimum: Media Composer 2024.12 (LTM). Recommended: 2025.12.1.** Any license
-tier — panels run on all licenses from MC 2024.6 onward (older than 2024.6
-requires Ultimate or Enterprise). AEBridge is built and tested against Panel SDK
-Drop 16 (aligned with MC 2025.12.1), which guarantees every code path behaves as
-built.
+**RC1 minimum: Media Composer 2025.12.1.** This is the oldest version on which
+AEBridge can keep every shipped feature, including reliable command automation
+and per-track stacked-shot naming. The panel now reads `GetAppInfo` at startup
+and exposes command-driven controls only when the host version supports them.
+Any license tier is supported at this minimum. AEBridge is built and tested
+against Panel SDK Drop 16, aligned with MC 2025.12.1.
 
-**Why 2024.12 is the practical floor** (not 2024.2, where the APIs technically
-first appear): MC 2024.12 (Drop 12) upgraded the embedded WebView from Chromium
-87 to **Chromium 108** and added native Apple-Silicon support. The panel is a
-modern Nuxt 2 build, so the older Chromium 87 in 2024.6 and earlier is a real
-UI-rendering risk; 2024.12 removes it — and it's the **LTM (Long Term
-Maintenance)** release, stable and widely deployed.
+Media Composer 2024.12 remains a useful best-effort diagnostic floor because it
+has the newer Chromium 108 WebView and native Apple-Silicon support, but it is
+not an RC1-supported configuration: command APIs and the exact marker response
+needed by stacked naming are not consistently available there.
 
 Requirements are tiered by which MCAPI calls each feature uses (source: Panel SDK
 `releases.md`, drop → MC version):
 
-- **Core round-trip (single / stack / batch): MC 2024.2 API-wise, 2024.12 in
-  practice.** The pipeline depends on `CreateSubClip` (Drop 9 / MC 2024.2);
+- **Core round-trip calls first exist in MC 2024.2 and generally run on
+  2024.12.** The pipeline depends on `CreateSubClip` (Drop 9 / MC 2024.2);
   everything else it uses predates that (`GetMobTrackInfo`, `ExportEDL`,
   `GetListOfExportSettings`, `GetMarkers`, `GetViewerMobs`, `ImportFile`,
-  `SetMobInfo`). Runs fully on 2024.12; the Chromium-87 WebView is why 2024.12,
-  not 2024.2, is the real floor.
+  `SetMobInfo`). This does not make the complete RC1 feature set supported on
+  those versions.
 - **`DoCommand`-based features need MC 2025.6 (Drop 13), reliable at 2025.12
   (Drop 15).** `GetListOfCommands` / `IsCommandsEnabled` / `DoCommand` arrived in
   Drop 13 / MC 2025.6; below that they return "method not found," so the
   Diagnostics **auto-solo** and any command-driven track toggling don't exist
-  (AEBridge's code calls these — on 2024.12 those paths must be version-gated).
+  on those hosts. AEBridge gates those controls using the host version returned
+  by `GetAppInfo`.
   They only became reliable with `MakeWindowActive` in Drop 15 / MC 2025.12.
-  Since the shipped flow is manual-solo, no *working* feature is lost below
-  2025.6 — only the unfinished auto-solo experiment.
+  The manual-solo path remains available as a fallback.
 - **Per-track marker isolation — NEEDS VERIFICATION on 2024.12.** The
   `GetMarkers` track filter + `track_label` on the response — which makes a
   stacked shot take V1's marker comment, not a higher track's — is present in the
@@ -60,17 +59,16 @@ Requirements are tiered by which MCAPI calls each feature uses (source: Panel SD
   already probes multiple bin-path spellings and normally passes an explicit
   export setting, so these rarely bite.
 
-**Net:** the full shipped round-trip runs on **2024.12 (LTM)** with a modern
-WebView; there you give up auto-solo (needs 2025.6) and must verify stacked
-marker naming. Ship against **2025.12.1** to get every path — including
-marker-track naming and command reliability — as designed. The absolute floor for *any* Avid
+**Net:** RC1 supports **Media Composer 2025.12.1 and newer**. Earlier versions
+may load the stable AVPI and some core calls may work, but they are explicitly
+outside the no-feature-loss support claim. The absolute floor for any Avid
 panel to load at all is MC 2023.8 (`faq.md`).
 
 ## Panel UI (Nuxt 2)
 
 ```bash
 cd AE_Bridge
-nvm use                 # Node 16.20.2
+nvm use                 # Node 22.23.1
 yarn install
 yarn dev                # dev server on 127.0.0.1:3010 (hot reload)
 ```
@@ -93,9 +91,36 @@ yarn build:copy --run     # copy dist/AEBridge.avpi to Avid's PanelSDKPlugins
 
 ```bash
 yarn generate:release      # static-export Nuxt to dist/html/
-pip install -r requirements.txt
-PYTHONPATH=. python -m service.app   # serves API + the built UI on 127.0.0.1:8010
+yarn check:release-bundle  # reject source maps, local paths, and secret material
+pip install -r requirements-lock.txt
+PYTHONPATH=. python3 -m service.app  # serves API + the built UI on 127.0.0.1:8010
 ```
+
+The shipped product does not run a Nuxt or Node server. Nuxt is a build-only
+dependency that emits the static panel files embedded in the helper. The
+release workflow audits the production dependency graph, scans the generated
+bundle, and builds from the checked-in lockfile. Nuxt 2 itself is end-of-life;
+its remaining audit findings are confined to generator/dev-server utilities
+that are not copied into the installer. Migrating the panel build to a current
+Vue/Vite stack remains tracked release engineering work, not a hidden RC1
+runtime dependency.
+
+For a signed installer, publish the dual-architecture helper first and stage
+that exact immutable version before building the DMG:
+
+```bash
+bash ota/stage-helper-seeds.sh 1.0.0
+bash installer/make-dmg.sh
+```
+
+The installer contains separate signed arm64 and x86_64 seeds and chooses from
+the Mac's physical architecture, even if the installer itself was launched
+under Rosetta. It verifies architecture, code signature, and Team ID both
+before and after copying the helper.
+
+The DMG also ships the user manual, `Assets/AE_Bridge_User_Guide.pdf`, as
+"AE Bridge User Guide.pdf" next to the installer. The build stops if the PDF
+is missing; set `AEBRIDGE_USER_GUIDE=/path/to/guide.pdf` to use another copy.
 
 The helper serves `dist/html` at `/app` (with a localhost-only CSP) and its
 assets at `/_nuxt/*`. If `dist/html` doesn't exist yet, it falls back to the
@@ -105,11 +130,13 @@ Open `http://localhost:8010/app` to see the panel outside Avid.
 
 ## Install in Media Composer
 
-1. `python build/build_avpi.py --install` (copies the `.avpi` to
+1. `python3 build/build_avpi.py --install` (copies the `.avpi` to
    `/Library/Application Support/Avid/PanelSDKPlugins/`).
 2. Make sure the helper is running on `8010`.
-3. Restart Media Composer → **Tools → AEBridge**. A floating window opens the
-   panel from `localhost:8010/app`.
+3. Fully quit and reopen Media Composer → **Tools → AEBridge**. Closing a
+   project or window is not sufficient because Avid discovers new panels only
+   at application launch. The packaged installer handles this quit/reopen flow
+   and offers an **Open Avid** button; restarting the Mac is not required.
 
 An **unsigned** `.avpi` loads only on a developer machine. For distribution,
 submit it to Avid's signing service (the manifest URL is stable, so it's signed
@@ -127,7 +154,7 @@ once). See the panel's `avid-panel-distribution` skill for the OTA/signing flow.
 - Full round-trip state machine, path safety, and sidecar are real.
 
 > **After changing helper code, restart the helper** (`Ctrl-C`, rerun
-> `python -m service.app`). AE detection is cached at startup.
+> `python3 -m service.app`). AE detection is cached at startup.
 
 ## Using it (Avid → After Effects)
 
@@ -156,6 +183,6 @@ once). See the panel's `avid-panel-distribution` skill for the OTA/signing flow.
 ## Verify
 
 ```bash
-PYTHONPATH=. python tests/test_smoke.py         # route contract + round-trip
-PYTHONPATH=. python tests/test_ui_and_avpi.py   # served UI + packaged .avpi
+PYTHONPATH=. python3 tests/test_smoke.py        # route contract + round-trip
+PYTHONPATH=. python3 tests/test_ui_and_avpi.py  # served UI + packaged .avpi
 ```
