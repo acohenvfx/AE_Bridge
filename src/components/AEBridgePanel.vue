@@ -110,7 +110,7 @@
                 <div class="eb-mono" style="font-size:12px; overflow-wrap:anywhere">
                   {{ sh.baseName ? withAffixes(sh.baseName) : sh.clipName }}
                 </div>
-                <div class="eb-muted" style="font-size:11px">{{ sh.recIn }}–{{ sh.recOut }}</div>
+                <div class="eb-muted" style="font-size:11px">{{ sh.recIn }}–{{ sh.recOut }}<span v-if="sh.sentJobId" class="c-ok"> · sent</span></div>
               </div>
               <span class="eb-mono" style="font-size:11px; white-space:nowrap">
                 <span
@@ -499,6 +499,7 @@
 </template>
 
 <script>
+import { isolationConflicts, soloScope, conflictMessage } from '~/utils/api/trackIsolation.mjs'
 import { aebridge as state } from '~/store/toolState'
 import * as api from '~/utils/api/aebridge'
 import * as tl from '~/utils/api/timeline'
@@ -594,7 +595,7 @@ export default {
     },
     rangeReadyCount() {
       if (!this.s.range) return 0
-      return this.s.range.shots.filter((sh) => (sh.grabbed || []).length && sh.shotMeta).length
+      return this.s.range.shots.filter((sh) => (sh.grabbed || []).length && sh.shotMeta && !sh.sentJobId).length
     },
     // The identity bar answers one question: is the bridge live? Anything
     // that is NOT fine gets named, because that's the actionable case.
@@ -928,6 +929,14 @@ export default {
         this.autoGrabStatus = 'Solo V' + this.anchorTrack + ' first — it names the stack.'
         return
       }
+      // Same rule the grab's isolation guard enforces. Without this, a
+      // non-stack track with clips elsewhere made every poll fire a grab that
+      // the guard was certain to reject.
+      const conflicts = isolationConflicts(tracks, solo)
+      if (conflicts.length) {
+        this.autoGrabStatus = conflictMessage(solo, conflicts)
+        return
+      }
       this.autoGrabStatus = ''
       await this.doGrab(solo)
     },
@@ -975,6 +984,11 @@ export default {
       const solo = enabled[0]
       if (solo !== next) {
         this.autoGrabRangeStatus = 'Solo V' + next + ' next, not V' + solo + ' — grabbed in order so the anchor track (V' + this.s.range.anchorTrack + ') names each shot first.'
+        return
+      }
+      const conflicts = isolationConflicts(tracks, solo)
+      if (conflicts.length) {
+        this.autoGrabRangeStatus = conflictMessage(solo, conflicts)
         return
       }
       this.autoGrabRangeStatus = ''
@@ -1075,11 +1089,17 @@ export default {
       const seq = this.s.shot && this.s.shot.mobId
       if (!seq) { this.s.message = 'No sequence — refresh the shot first.'; return }
       const stackTracks = this.s.stack.map((p) => p.track)
-      // Remember the editor's own enable state so we can restore it.
+      // Solo across every track the isolation guard cares about — the stack
+      // AND any other video track with clips in the sequence — or a grab is
+      // rejected because e.g. V3 (clips elsewhere, no clip here) is still on.
+      // Remember the editor's own enable state for all of them to restore.
+      let scope = stackTracks
       const desired = {}
       try {
-        for (const t of await tl.getMobTrackInfo(seq)) {
-          if (stackTracks.includes(t.number)) desired[t.number] = !!t.enabled
+        const tracks = await tl.getMobTrackInfo(seq)
+        scope = soloScope(tracks, stackTracks)
+        for (const t of tracks) {
+          if (scope.includes(t.number)) desired[t.number] = !!t.enabled
         }
       } catch (e) { /* restore is best-effort */ }
 
@@ -1091,7 +1111,7 @@ export default {
         for (const p of this.s.stack) {
           if (this.isGrabbed(p.track)) continue
           this.s.message = 'Soloing V' + p.track + '…'
-          await tl.soloVideoTrack({ sequenceMobId: seq, trackNumber: p.track, stackTracks })
+          await tl.soloVideoTrack({ sequenceMobId: seq, trackNumber: p.track, stackTracks: scope })
           await this.doGrab(p.track)
           // doGrab swallows its error into s.message; stop rather than pile up.
           if (!this.isGrabbed(p.track)) {
@@ -1430,8 +1450,14 @@ export default {
     // single Send, run N times. Stops on the first failure so a half-sent batch
     // is obvious rather than silently partial.
     async doSendRange() {
+      // Shots that already went out (an earlier attempt stopped partway) are
+      // skipped, or retrying after a failure duplicated their jobs and exports.
       const ready = (this.s.range ? this.s.range.shots : [])
-        .filter((sh) => (sh.grabbed || []).length && sh.shotMeta)
+        .filter((sh) => (sh.grabbed || []).length && sh.shotMeta && !sh.sentJobId)
+      if (!ready.length && this.s.range && this.s.range.shots.some((sh) => sh.sentJobId)) {
+        this.s.message = 'Every grabbed shot in this range has already been sent.'
+        return
+      }
       if (!ready.length) {
         const anchor = this.s.range ? this.s.range.anchorTrack : null
         this.s.message = 'Nothing to send — grab V' + (anchor || '1') + ' across the range first.'
@@ -1446,6 +1472,8 @@ export default {
           // eslint-disable-next-line no-await-in-loop
           const job = await this.sendOneShot(sh.shotMeta, sh.grabbed)
           if (!job) return // sendOneShot set the message
+          // $set: sentJobId is a new key on an already-reactive shot object.
+          this.$set(sh, 'sentJobId', job.job_id || true)
           sent += 1
         }
         this.s.message = 'Sent ' + sent + ' job' + (sent === 1 ? '' : 's') + ' from the marked range.'
@@ -1453,7 +1481,9 @@ export default {
         await this.selectScratchAfterSend()
         await this.refreshJobs()
       } catch (e) {
-        this.s.message = 'Range send stopped after ' + sent + ' — ' + e.message
+        const left = ready.length - sent
+        this.s.message = 'Range send stopped after ' + sent + ' — ' + e.message +
+          ' Send again to retry the remaining ' + left + ' (shots already sent are skipped).'
       } finally {
         this.s.sending = false
       }

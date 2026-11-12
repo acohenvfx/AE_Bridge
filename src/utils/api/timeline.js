@@ -70,6 +70,7 @@ import { recoverEdl } from '~/utils/api/aebridge.js'
 import { createEdlSettingResolver } from '~/utils/api/edlSettings.mjs'
 import { tcToFrames, durationToFrames } from '~/utils/api/timecode.mjs'
 import { narrowToSelection, lowestTrack } from '~/utils/api/trackSelection.mjs'
+import { isolationConflicts } from '~/utils/api/trackIsolation.mjs'
 
 const TRACKTYPE_PICTURE = 0 // TrackType.TRACKTYPE_PICTURE (video)
 import {
@@ -889,9 +890,7 @@ async function grabSourceHandledMob({ sequenceMobId, sequenceName = '', atTC, at
   // classification cannot be trusted. The workflow already solos one plate at
   // a time, so enforce that state directly. This avoids another series of EDL
   // exports during every grab and can never produce a silent flattened plate.
-  const conflicts = allTracks
-    .filter((t) => t.type === TRACKTYPE_PICTURE && t.number !== track.number && t.enabled && t.numSegments > 0)
-    .map((t) => 'V' + t.number)
+  const conflicts = isolationConflicts(allTracks, track.number).map((n) => 'V' + n)
   if (conflicts.length) {
     throw new Error(
       'Enable ONLY ' + wantTrack + ' to grab this plate — ' + conflicts.join(', ') +
